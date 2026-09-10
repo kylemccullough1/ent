@@ -53,14 +53,14 @@ grove() {
 PowerShell (`$PROFILE`), with the same success check:
 
 ```powershell
+# `git grove` resolves directly from PowerShell because ~/.local/bin is on PATH; no bash.exe needed
 function grove {
-  $bash = "C:\Program Files\Git\bin\bash.exe"     # (Get-Command git).Source shows where Git lives
   switch ($args[0]) {
     { $_ -in 'add','init','go','up','down' } {
-      $p = & $bash -lc "git grove $($args -join ' ') --print-path"
+      $p = & git grove @args --print-path
       if ($LASTEXITCODE -eq 0) { Set-Location $p }
     }
-    default { & $bash -lc "git grove $($args -join ' ')" }
+    default { & git grove @args }
   }
 }
 ```
