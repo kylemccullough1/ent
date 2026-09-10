@@ -1,0 +1,12 @@
+# .gitgrove -- team settings for git-grove.
+# Copy to .gitgrove and commit it on the default branch; git-grove reads it from there
+# (git show <default>:.gitgrove), so it is the same file from every worktree.
+# Lines are key = value. Blank lines and # comments are ignored. The file is parsed, never sourced.
+
+# Tree branch names must match this extended regex. Absent or empty = no rule.
+# Never applied to roots (branches created with --from).
+# branchPattern = ^(contributor/)?(feature|defect)/[A-Za-z0-9._-]+$
+
+# Extra branches `git grove rm` refuses to remove, space-separated.
+# The default branch is always protected; this list only adds to it.
+# protect = integration develop

@@ -1,0 +1,5 @@
+# bash runs these; a CR at the end of the shebang line breaks them. Force LF on every platform.
+*           text=auto
+git-grove   text eol=lf
+*.sh        text eol=lf
+*.bash      text eol=lf

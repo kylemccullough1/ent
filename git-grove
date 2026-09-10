@@ -1,0 +1,579 @@
+#!/usr/bin/env bash
+# git-grove: a bare-repo worktree layout, one folder per branch, with parent-aware "roots".
+#
+#   <grove>/.bare                        the git database (bare)
+#   <grove>/.git                         one line: "gitdir: ./.bare"
+#   <grove>/<branch-dashed>/             a tree: one worktree per branch ("/" in the name becomes "-")
+#   <grove>/roots/<parent-dashed>/<name>/
+#                                        a root: a worktree that records a parent branch in
+#                                        git config branch.<b>.groveParent. Never nested inside it.
+#
+# Every mutating git command is echoed as "$ git ..." on stderr so the git underneath stays visible.
+# "git grove help" prints the cheat sheet. Bash 4+ and git are the only dependencies.
+set -euo pipefail
+
+VERSION=0.1.0
+ROOTS_DIR=roots
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ---------- options (global; parsed once, allowed anywhere on the line) ----------
+DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 APPLY=0 PRINT_PATH=0 NO_TRACK=0 JSON=0
+PULL=0 PULL_MODE=ff-only FROM=""
+ARGS=()
+GROVE=""
+
+# ---------- output ----------
+# Errors, notices and "$ git" echoes go to stderr; data (paths, lists) goes to stdout so it pipes.
+ESC=$'\033'
+if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then E_DIM="$ESC[2m" E_RED="$ESC[31m" E_YEL="$ESC[33m" E_RST="$ESC[0m"
+else E_DIM='' E_RED='' E_YEL='' E_RST=''; fi
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then O_DIM="$ESC[2m" O_RED="$ESC[31m" O_YEL="$ESC[33m" O_GRN="$ESC[32m" O_RST="$ESC[0m"
+else O_DIM='' O_RED='' O_YEL='' O_GRN='' O_RST=''; fi
+
+# fmt_cmd: render a command the way you would type it (quote args with spaces); "g" shows as git -C <grove>
+fmt_cmd() {
+  local out="" a
+  if [[ "${1:-}" == g ]]; then shift; out="git -C $GROVE"; fi
+  for a in "$@"; do
+    if [[ -z "$a" || "$a" == *[[:space:]\'\"\$\`\\]* ]]; then a="'${a//\'/\'\\\'\'}'"; fi
+    out+="${out:+ }$a"
+  done
+  printf '%s' "$out"
+}
+join()  { local IFS="$1"; shift; printf '%s' "$*"; }
+say()   { printf '%s$ %s%s\n' "$E_DIM" "$*" "$E_RST" >&2; }
+note()  { (( QUIET )) || printf '%s\n' "$*" >&2; }
+warn()  { printf '%sgit-grove: %s%s\n' "$E_YEL" "$*" "$E_RST" >&2; }
+die()   { printf '%sgit-grove: %s%s\n' "$E_RED" "$1" "$E_RST" >&2; exit "${2:-1}"; }
+# run: a command that changes something. Echoed; skipped under --dry-run. Under --print-path the
+# command's own stdout is moved to stderr ("HEAD is now at ..." from worktree add) so stdout stays the path.
+run()   { say "$(fmt_cmd "$@")"; if (( DRY_RUN )); then return 0; fi; if (( PRINT_PATH )); then "$@" 1>&2; else "$@"; fi; }
+# query: a command whose output the script branches on. Always executes; echoed only under -v.
+query() { if (( VERBOSE )); then say "$(fmt_cmd "$@")"; fi; "$@"; }
+
+# ---------- git helpers ----------
+abs_path() { (cd "$1" && { pwd -W 2>/dev/null || pwd -P; }); }   # pwd -W: C:/... on Git Bash, matches git's output
+dashed()   { printf '%s' "${1//\//-}"; }
+
+grove_root() {
+  local c
+  c="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || die "not inside a grove (no git repository here). See: git grove help init"
+  [[ "$(basename "$c")" == .bare ]] || die "not a grove: the git dir is $c, expected <grove>/.bare. See: git grove help init"
+  dirname "$c"
+}
+g()              { git -C "$GROVE" "$@"; }        # the .git pointer makes the grove root act as the bare repo
+default_branch() { g symbolic-ref --short HEAD 2>/dev/null || echo main; }
+has_local()      { g show-ref --verify -q "refs/heads/$1"; }
+has_remote()     { g show-ref --verify -q "refs/remotes/origin/$1"; }
+upstream_of()    { g rev-parse --abbrev-ref "$1@{u}" 2>/dev/null || true; }
+cur_worktree()   { git rev-parse --show-toplevel 2>/dev/null || true; }   # empty at the grove root or outside
+cur_branch()     { if [[ -n "$(cur_worktree)" ]]; then git symbolic-ref --short -q HEAD 2>/dev/null || true; fi; }
+
+# worktrees: "<path>\t<branch>" per worktree that is on a branch (skips the bare entry and detached HEADs)
+worktrees() {
+  g worktree list --porcelain | awk '
+    /^worktree /{p=substr($0,10)}
+    /^branch /{b=substr($0,8); sub("^refs/heads/","",b); print p "\t" b}'
+}
+wt_path_for()   { worktrees | awk -F'\t' -v b="$1" '$2==b{print $1; exit}'; }
+wt_branch_at()  { worktrees | awk -F'\t' -v p="$1" '$1==p{print $2; exit}'; }
+
+# parentage lives in git config: branch.<child>.groveParent = <parent>. Local to this grove, never pushed.
+parent_of()   { g config --get "branch.$1.groveParent" 2>/dev/null || true; }
+parents()     { g config --get-regexp '^branch\..*\.groveparent$' 2>/dev/null | sed -E 's/^branch\.(.*)\.groveparent /\1\t/' || true; }
+children_of() { parents | awk -F'\t' -v p="$1" '$2==p{print $1}' | sort; }
+
+# ---------- config: env > git config (global then .bare/config) > committed .gitgrove on the default branch ----------
+teamfile()     { g show "$(default_branch):.gitgrove" 2>/dev/null || true; }
+teamfile_get() {
+  teamfile | awk -v k="$1" '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*(#|$)/ { next }
+    { key=$0; sub(/=.*/, "", key); gsub(/[[:space:]]/, "", key)
+      if (key == k) { val=$0; sub(/^[^=]*=[[:space:]]*/, "", val); print val; exit } }'
+}
+cfg() {   # cfg <key>: an empty value set at a nearer layer wins over a filled one further away (opt-out)
+  local key="$1" env="GROVE_${1^^}" v
+  if [[ -n "${!env+x}" ]]; then printf '%s' "${!env}"; return; fi
+  if v="$(g config --get "grove.$key" 2>/dev/null)"; then printf '%s' "$v"; return; fi
+  teamfile_get "$key"
+}
+protected() {   # union of every layer plus the default branch; nobody can subtract
+  {
+    default_branch
+    if [[ -n "${GROVE_PROTECT:-}" ]]; then tr ' ' '\n' <<<"$GROVE_PROTECT"; fi
+    g config --get-all grove.protect 2>/dev/null | tr ' ' '\n'
+    teamfile_get protect | tr ' ' '\n'
+  } | sed '/^$/d' | sort -u
+}
+is_protected() { protected | grep -qx -- "$1"; }
+
+emit_path() {   # emit_path <path> <friendly line>: --print-path puts the path alone on stdout for the shell wrapper
+  if (( DRY_RUN )); then note "(dry run: nothing was created)"; return 0; fi
+  if (( PRINT_PATH )); then printf '%s\n' "$1"; else printf '%s\n' "$2"; note "cd \"$1\""; fi
+}
+
+# ---------- init ----------
+cmd_init() {
+  local src="${ARGS[1]:-}" dir="${ARGS[2]:-}" kind=name
+  [[ -n "$src" ]] || usage_die init
+  if [[ -d "$src" ]] && git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+    kind=clone; src="$(abs_path "$src")"
+  elif [[ "$src" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// || "$src" =~ ^[^/[:space:]]+@[^:]+: || "$src" == *.git ]]; then
+    kind=url
+  elif [[ "$src" == */* || "$src" == .* ]]; then
+    die "'$src' is neither a URL nor an existing git repository"
+  fi
+  local base; base="$(basename "${src%/}")"; base="${base%.git}"
+  [[ -n "$dir" ]] || dir="$base"
+  if [[ -e "$dir" && -n "$(ls -A "$dir" 2>/dev/null)" ]]; then die "'$dir' exists and is not empty; pass a different [dir]"; fi
+
+  run mkdir -p "$dir"
+  if (( DRY_RUN )); then note "(dry run) would build a grove at $dir from $kind '$src'"; return 0; fi
+  dir="$(abs_path "$dir")"; GROVE="$dir"
+  run git init --bare "$dir/.bare"
+  say "printf 'gitdir: ./.bare\\n' > $dir/.git     # printf, not echo: a CRLF or a BOM here breaks the pointer"
+  printf 'gitdir: ./.bare\n' > "$dir/.git"
+
+  local def
+  if [[ "$kind" == name ]]; then
+    def="$(git config --get init.defaultBranch 2>/dev/null || true)"; def="${def:-main}"
+    run g symbolic-ref HEAD "refs/heads/$def"
+    run g worktree add --orphan -b "$def" "$GROVE/$(dashed "$def")"
+    run git -C "$GROVE/$(dashed "$def")" commit --allow-empty -m "Initial commit"
+  else
+    local origin="$src"
+    if [[ "$kind" == clone ]]; then
+      origin="$(git -C "$src" remote get-url origin 2>/dev/null || true)"; origin="${origin:-$src}"
+    fi
+    run g remote add origin "$origin"          # remote add writes the fetch refspec itself, even in a bare repo
+    run g fetch origin || warn "fetch from $origin failed; continuing with what is local"
+    run g remote set-head origin -a || true    # only `git clone` sets origin/HEAD; remote add + fetch do not
+    if [[ "$kind" == clone ]]; then
+      run g fetch "$src" '+refs/heads/*:refs/heads/*'      # keep the clone's unpushed local branches
+      local key val                                        # fetch copies refs, not tracking; replay it
+      while read -r key val; do
+        if [[ -n "$key" ]]; then run g config "$key" "$val"; fi
+      done < <(git -C "$src" config --get-regexp '^branch\..*\.(remote|merge)$' 2>/dev/null || true)
+    fi
+    def="$(g symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    if [[ -z "$def" ]]; then
+      local c; for c in main master; do if has_local "$c" || has_remote "$c"; then def="$c"; break; fi; done
+    fi
+    [[ -n "$def" ]] || die "could not determine the default branch: no origin/HEAD, main, or master"
+    # `init --bare` pointed HEAD at init.defaultBranch, which may not exist here. Every "the grove's
+    # main branch" check reads this HEAD, so it must name a real branch.
+    run g symbolic-ref HEAD "refs/heads/$def"
+    if has_local "$def"; then
+      run g worktree add "$GROVE/$(dashed "$def")" "$def"
+      if has_remote "$def" && [[ -z "$(upstream_of "$def")" ]]; then run g branch --set-upstream-to="origin/$def" "$def"; fi
+    else
+      run g worktree add --track -b "$def" "$GROVE/$(dashed "$def")" "origin/$def"
+    fi
+  fi
+
+  local dwt="$GROVE/$(dashed "$def")"
+  if [[ -d "$dwt/.githooks" ]]; then
+    if [[ -t 0 ]]; then
+      local a; read -r -p "Found .githooks/. Point core.hooksPath at it so git runs them? [y/N] " a
+      if [[ "$a" =~ ^[yY]$ ]]; then run g config core.hooksPath .githooks; fi
+    else
+      note "Found .githooks/. To use them: git -C \"$dwt\" config core.hooksPath .githooks"
+    fi
+  fi
+  case "$OSTYPE" in msys*|cygwin*) note "Windows: deep root paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
+  emit_path "$dwt" "Grove ready at $GROVE (default branch: $def)"
+}
+
+# ---------- add ----------
+cmd_add() {
+  local name="${ARGS[1]:-}" base="${ARGS[2]:-}" branch path parent=""
+  [[ -n "$name" ]] || usage_die add
+  run g worktree prune                                     # forget worktrees whose folder was deleted by hand
+
+  if [[ -n "$FROM" ]]; then
+    parent="$FROM"
+    if [[ "$parent" == "." ]]; then
+      parent="$(cur_branch)"; [[ -n "$parent" ]] || die "--from . only works inside a worktree that is on a branch"
+    fi
+    has_local "$parent" || has_remote "$parent" || die "parent branch '$parent' does not exist"
+    [[ -z "$base" ]] || die "a root is always based on its parent; drop the [base] argument"
+    if [[ "$name" == */* ]]; then                          # a full branch name is taken literally
+      branch="$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$(dashed "$name")"
+    else                                                   # a bare name is prefixed: <parent>-<name>
+      branch="$parent-$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$name"
+    fi
+    if has_local "$parent"; then base="$parent"; else base="origin/$parent"; fi
+  else
+    branch="$name"
+    local pat; pat="$(cfg branchPattern)"
+    if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
+    local d; d="$(dashed "$branch")"
+    case "$d" in "$ROOTS_DIR"|.bare|.git) die "'$branch' is a reserved folder name in a grove" ;; esac
+    path="$GROVE/$d"
+  fi
+
+  local existing; existing="$(wt_path_for "$branch")"
+  [[ -z "$existing" ]] || die "branch '$branch' already has a worktree at $existing"
+  if [[ -e "$path" ]]; then die "folder already exists: $path (feature/x and feature-x share one folder; whichever came first owns it)"; fi
+
+  if has_local "$branch"; then
+    note "Branch $branch exists locally; attaching a worktree."
+    run g worktree add "$path" "$branch"
+    if (( ! NO_TRACK )) && has_remote "$branch" && [[ -z "$(upstream_of "$branch")" ]]; then
+      run g branch --set-upstream-to="origin/$branch" "$branch"
+    fi
+  elif has_remote "$branch"; then
+    note "Branch origin/$branch exists; creating a tracking worktree."
+    if (( NO_TRACK )); then run g worktree add --no-track -b "$branch" "$path" "origin/$branch"
+    else run g worktree add --track -b "$branch" "$path" "origin/$branch"; fi
+  else
+    if [[ -z "$base" ]]; then base="$(cur_branch)"; [[ -n "$base" ]] || base="$(default_branch)"; fi
+    note "New branch $branch from $base."
+    # --no-track always: branch.autoSetupMerge=true would otherwise make a remote-tracking base the upstream
+    run g worktree add --no-track -b "$branch" "$path" "$base"
+  fi
+  if [[ -n "$parent" ]]; then run g config "branch.$branch.groveParent" "$parent"; fi
+  emit_path "$path" "Created $branch at $path"
+}
+
+# ---------- list ----------
+declare -A L_PATH L_PARENT
+row() {   # row <branch> <path> -> sets R_UP R_AHEAD R_BEHIND R_DIRTY R_MERGING
+  local b="$1" p="$2"
+  R_UP="$(upstream_of "$b")"; R_AHEAD=0; R_BEHIND=0; R_DIRTY=0; R_MERGING=0
+  if [[ -n "$R_UP" ]]; then
+    read -r R_AHEAD R_BEHIND < <(g rev-list --left-right --count "$b...$R_UP" 2>/dev/null || echo "0 0")
+  fi
+  if [[ -n "$p" && -d "$p" ]]; then
+    R_DIRTY="$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ -f "$(git -C "$p" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null)" ]]; then R_MERGING=1; fi
+  fi
+}
+pad() { local s="$1" w="$2"; printf '%s' "$s"; local n=$(( w - ${#s} )); if (( n > 0 )); then printf '%*s' "$n" ''; fi; }
+print_row() {   # print_row <prefix> <branch>
+  local prefix="$1" b="$2" p rel status
+  p="${L_PATH[$b]:-}"      # separate statement: in one `local a=.. b=$a` line, $a is expanded before a is set
+  row "$b" "$p"
+  if [[ -n "$p" ]]; then rel="${p#"$GROVE"/}/"; else rel="${O_DIM}(none)${O_RST}"; fi
+  status=""
+  if [[ -n "$R_UP" ]]; then
+    status="$R_UP"
+    if (( R_AHEAD )); then status+=" ${O_GRN}^$R_AHEAD${O_RST}"; fi
+    if (( R_BEHIND )); then status+=" ${O_YEL}v$R_BEHIND${O_RST}"; fi
+  else status="${O_DIM}no upstream${O_RST}"; fi
+  if [[ -n "$p" ]]; then
+    if (( R_DIRTY )); then status+="  ${O_YEL}$R_DIRTY dirty${O_RST}"; else status+="  clean"; fi
+    if (( R_MERGING )); then status+="  ${O_RED}MERGING${O_RST}"; fi
+  fi
+  pad "$prefix$b" 40; printf ' '; pad "$rel" 34; printf ' %s\n' "$status"
+}
+print_subtree() {   # print_subtree <branch> <indent>: children drawn with |-- / `-- from groveParent
+  local b="$1" indent="$2" kids k i n
+  mapfile -t kids < <(children_of "$b")
+  n=${#kids[@]}
+  for (( i=0; i<n; i++ )); do
+    k="${kids[$i]}"
+    if (( i == n-1 )); then print_row "${indent}\`-- " "$k"; print_subtree "$k" "${indent}    "
+    else print_row "${indent}|-- " "$k"; print_subtree "$k" "${indent}|   "; fi
+  done
+}
+json_str() { local s="${1//\\/\\\\}"; s="${s//\"/\\\"}"; printf '"%s"' "$s"; }
+json_or_null() { if [[ -n "$1" ]]; then json_str "$1"; else printf 'null'; fi; }
+cmd_list() {
+  query g worktree prune
+  local def; def="$(default_branch)"
+  local p b
+  while IFS=$'\t' read -r p b; do L_PATH["$b"]="$p"; done < <(worktrees)
+  while IFS=$'\t' read -r b p; do L_PARENT["$b"]="$p"; done < <(parents)
+  local -a branches; mapfile -t branches < <(g for-each-ref --format='%(refname:short)' refs/heads | sort)
+
+  if (( JSON )); then
+    local first=1
+    printf '['
+    for b in "${branches[@]}"; do
+      row "$b" "${L_PATH[$b]:-}"
+      if (( ! first )); then printf ','; fi; first=0
+      printf '\n  {"branch": %s, "parent": %s, "path": %s, "upstream": %s, "ahead": %s, "behind": %s, "dirty": %s, "merging": %s}' \
+        "$(json_str "$b")" "$(json_or_null "${L_PARENT[$b]:-}")" "$(json_or_null "${L_PATH[$b]:-}")" \
+        "$(json_or_null "$R_UP")" "$R_AHEAD" "$R_BEHIND" "$R_DIRTY" "$R_MERGING"
+    done
+    printf '\n]\n'
+    return 0
+  fi
+
+  # top level: the default branch first, then every branch with no (known) parent
+  local -a tops=()
+  if has_local "$def"; then tops+=("$def"); fi
+  for b in "${branches[@]}"; do
+    [[ "$b" == "$def" ]] && continue
+    local par="${L_PARENT[$b]:-}"
+    if [[ -z "$par" ]] || ! has_local "$par"; then tops+=("$b"); fi
+  done
+  for b in "${tops[@]}"; do print_row "" "$b"; print_subtree "$b" ""; done
+}
+
+# ---------- rm ----------
+collect_removals() { local k; while read -r k; do if [[ -n "$k" ]]; then collect_removals "$k"; fi; done < <(children_of "$1"); RM_PLAN+=("$1"); }
+cmd_rm() {
+  local target="${ARGS[1]:-}" branch
+  [[ -n "$target" ]] || usage_die rm
+  if has_local "$target"; then branch="$target"
+  elif [[ -d "$target" ]]; then
+    branch="$(wt_branch_at "$(abs_path "$target")")"
+    [[ -n "$branch" ]] || die "'$target' is not a worktree registered in this grove"
+  else die "no branch or worktree named '$target'"; fi
+
+  local def cwd; def="$(default_branch)"; cwd="$(cur_worktree)"
+  local -a kids; mapfile -t kids < <(children_of "$branch")
+  if (( ${#kids[@]} )) && (( ! RECURSIVE )); then
+    local -a names=(); local k; for k in "${kids[@]}"; do names+=("${k#"$branch"-}"); done
+    die "$branch has ${#kids[@]} root(s): $(join ' ' "${names[@]}"). Use -r to remove them too."
+  fi
+  RM_PLAN=()
+  collect_removals "$branch"    # deepest first, target last
+
+  local b p n
+  local -a lines=()
+  for b in "${RM_PLAN[@]}"; do
+    p="$(wt_path_for "$b")"
+    # 1. never removable
+    if is_protected "$b"; then die "'$b' is protected (the grove's main branch, or listed in protect). Use 'git grove destroy' to delete a whole grove."; fi
+    if [[ -n "$p" && -n "$cwd" ]] && [[ "$cwd" == "$p" || "$cwd" == "$p/"* ]]; then die "you are standing inside $p. cd out of it first."; fi
+    # 3. uncommitted changes
+    if [[ -n "$p" ]] && [[ -n "$(git -C "$p" status --porcelain 2>/dev/null)" ]]; then
+      (( FORCE )) || die "$b has uncommitted changes. Use --force to discard them."
+    fi
+    # 4. commits reachable from none of: main, the parent, the upstream
+    if (( ! FORCE )); then
+      local -a refs=("$def"); local par up
+      par="$(parent_of "$b")"; if [[ -n "$par" ]] && has_local "$par"; then refs+=("$par"); fi
+      up="$(upstream_of "$b")"; if [[ -n "$up" ]]; then refs+=("$up"); fi
+      n="$(g rev-list --count "$b" --not "${refs[@]}" 2>/dev/null || echo 0)"
+      (( n == 0 )) || die "$b has $n commit(s) not on $(join ' ' "${refs[@]}" | sed 's/ /, /g'). Merge or push first, or use --force to lose them."
+    fi
+    lines+=("$b  ${p:-(no worktree)}")
+  done
+
+  if (( ! APPLY )); then
+    note "Would remove (branch, worktree folder, groveParent):"
+    for b in "${lines[@]}"; do printf '  %s\n' "$b"; done
+    note "Nothing changed. Re-run with --apply to do it."
+    return 0
+  fi
+
+  for b in "${RM_PLAN[@]}"; do
+    p="$(wt_path_for "$b")"
+    if [[ -n "$p" ]]; then
+      if (( FORCE )); then run g worktree remove --force "$p"; else run g worktree remove "$p"; fi
+      if [[ -d "$p" ]]; then say "rm -rf $p     # git unregistered it but Windows kept the folder"; rm -rf "$p"; fi
+    fi
+    if [[ -n "$(parent_of "$b")" ]]; then run g config --unset "branch.$b.groveParent"; fi   # before -D: git drops the section with the branch
+    run g branch -D "$b"                                    # rule 4 already proved reachability; -d would re-check against the wrong HEAD
+    if [[ -n "$p" && "$p" == "$GROVE/$ROOTS_DIR/"* ]]; then                    # empty bucket, then empty roots/
+      rmdir "$(dirname "$p")" 2>/dev/null || true
+      rmdir "$GROVE/$ROOTS_DIR" 2>/dev/null || true
+    fi
+    note "Removed $b."
+  done
+}
+
+# ---------- navigation: these print a path on stdout; the shell wrapper does the cd ----------
+cmd_go() {
+  local b="${ARGS[1]:-}"; [[ -n "$b" ]] || usage_die go
+  local p; p="$(wt_path_for "$b")"
+  if [[ -z "$p" ]]; then if has_local "$b"; then die "$b has no worktree. git grove add $b"; fi; die "no branch '$b'"; fi
+  printf '%s\n' "$p"
+}
+cmd_up() {
+  local b; b="$(cur_branch)"; [[ -n "$b" ]] || die "run 'up' from inside a worktree that is on a branch"
+  local par; par="$(parent_of "$b")"; [[ -n "$par" ]] || die "$b is a tree; it has no parent"
+  local p; p="$(wt_path_for "$par")"; [[ -n "$p" ]] || die "$par has no worktree. git grove add $par"
+  printf '%s\n' "$p"
+}
+cmd_down() {
+  local name="${ARGS[1]:-}"; [[ -n "$name" ]] || usage_die down
+  local b; b="$(cur_branch)"; [[ -n "$b" ]] || die "run 'down' from inside a worktree that is on a branch"
+  local k p
+  while read -r k; do
+    [[ -n "$k" ]] || continue
+    p="$(wt_path_for "$k")"
+    if [[ "$k" == "$b-$name" || "$k" == "$name" ]] || [[ -n "$p" && "$(basename "$p")" == "$name" ]]; then
+      [[ -n "$p" ]] || die "$k has no worktree. git grove add $k --from $b"
+      printf '%s\n' "$p"; return 0
+    fi
+  done < <(children_of "$b")
+  die "$b has no root named '$name'. Its roots: $(children_of "$b" | tr '\n' ' ')"
+}
+cmd_path() {
+  local b="${ARGS[1]:-}"
+  if [[ -z "$b" ]]; then printf '%s\n' "$GROVE"; return 0; fi
+  local p; p="$(wt_path_for "$b")"; [[ -n "$p" ]] || die "no worktree for '$b'"
+  printf '%s\n' "$p"
+}
+
+# ---------- sync ----------
+cmd_sync() {
+  run g fetch --all --prune                                # one object store: one fetch updates every worktree
+  if (( PULL )); then
+    local p b up
+    while IFS=$'\t' read -r p b; do
+      [[ -n "$b" ]] || continue
+      up="$(upstream_of "$b")"
+      if [[ -z "$up" ]]; then note "skip $b: no upstream"; continue; fi
+      if [[ -n "$(git -C "$p" status --porcelain 2>/dev/null)" ]]; then note "skip $b: uncommitted changes"; continue; fi
+      if [[ "$PULL_MODE" == rebase ]]; then
+        run git -C "$p" rebase "$up" || warn "$b: rebase stopped on conflicts. Resolve in $p, then git rebase --continue"
+      else
+        run git -C "$p" merge --ff-only "$up" || note "skip $b: diverged from $up (use --rebase)"
+      fi
+    done < <(worktrees)
+  fi
+  cmd_list
+}
+
+# ---------- help ----------
+usage() {
+  cat <<'USAGE'
+usage: git grove <verb> [options]
+
+  init <name | url | path-to-clone> [dir]   build a grove: new repo, or from a URL / an existing clone
+  add <branch> [base] [--from <parent>]      plant a tree, or with --from grow a root under <parent>
+  list [--json]                              every branch, roots drawn under their parents
+  rm <branch|path> [-r] [-f] [--apply]       preview a removal; --apply does it
+  go <branch> | up | down <name>             print a worktree path (the `grove` shell function cds)
+  path [branch]                              the grove's top folder, or a branch's folder
+  sync [--pull [--rebase]]                   fetch --all --prune, optionally fast-forward each worktree
+  help [verb]                                the cheat sheet, or one verb's usage
+
+options: -n/--dry-run  -v/--verbose  -q/--quiet  -r/--recursive  -f/--force  --apply
+         --print-path  --no-track  --from <parent>  --json  --pull  --ff-only  --rebase  -V/--version
+USAGE
+}
+usage_for() {
+  case "$1" in
+    init) cat <<'U'
+usage: git grove init <name | url | path-to-clone> [dir]
+
+  <name>            a brand-new repository: empty first commit on the default branch
+  <url>             fetch from a remote; origin/HEAD picks the default branch
+  <path-to-clone>   an existing clone: its origin becomes ours, its local branches (and their
+                    tracking) are copied. The clone itself is never modified.
+  [dir]             where to build; defaults to the repo's name
+
+Result: <dir>/.bare (git database), <dir>/.git (pointer), <dir>/<default>/ (first tree).
+U
+    ;;
+    add) cat <<'U'
+usage: git grove add <branch> [base] [--from <parent>] [--no-track] [--print-path]
+
+  tree:  git grove add feature/x [base]     folder <grove>/feature-x/ ("/" becomes "-")
+         base defaults to the branch you are standing in, else the grove's main branch.
+         An existing local branch is attached; an existing origin/<branch> is tracked.
+         branchPattern from .gitgrove / git config applies here.
+  root:  git grove add auth --from feature/x
+         branch feature/x-auth in <grove>/roots/feature-x/auth/, parent recorded in
+         git config branch.feature/x-auth.groveParent. A name containing "/" is used as-is.
+         --from . means the branch of the current worktree. No branchPattern check.
+U
+    ;;
+    list) cat <<'U'
+usage: git grove list [--json]
+
+One row per branch: name, folder relative to the grove, upstream with ahead/behind, dirty
+count, and MERGING while a merge is in progress. Roots are indented under their parent.
+Branches without a worktree show (none). --json prints the same fields as an array.
+U
+    ;;
+    rm) cat <<'U'
+usage: git grove rm <branch|path> [-r|--recursive] [-f|--force] [--apply]
+
+Preview by default; --apply performs it. Refuses, in this order:
+  1. the grove's main branch, anything in protect, the folder you are standing in  (no override)
+  2. a branch that still has roots                                                  (use -r)
+  3. uncommitted changes                                                            (use -f)
+  4. commits on neither main, the parent, nor the upstream                          (use -f)
+Then: git worktree remove, git config --unset groveParent, git branch -D, remove an empty bucket.
+U
+    ;;
+    go|up|down) cat <<'U'
+usage: git grove go <branch>     print the folder of any tree or root
+       git grove up             from a root, its parent's folder
+       git grove down <name>    a root of the current worktree, by name
+
+Each prints a path on stdout; the `grove` shell function (see README) does the cd.
+U
+    ;;
+    path) echo "usage: git grove path [branch]    the grove's top folder, or the folder for <branch>" ;;
+    sync) cat <<'U'
+usage: git grove sync [--pull [--ff-only|--rebase]]
+
+git fetch --all --prune, then list. With --pull, every clean worktree with an upstream is
+fast-forwarded (default) or rebased. Dirty, upstream-less and diverged worktrees are skipped
+and reported; a rebase that hits conflicts is left for you to finish.
+U
+    ;;
+    help) usage ;;
+    *) usage; return 1 ;;
+  esac
+}
+usage_die() { usage_for "$1" >&2; exit 2; }
+cmd_help() {
+  local v="${1:-}"
+  if [[ -n "$v" ]]; then usage_for "$v" || die "unknown verb '$v'" 2; return 0; fi
+  local f
+  for f in "$HERE/cheatsheet.md" "${XDG_DATA_HOME:-$HOME/.local/share}/git-grove/cheatsheet.md"; do
+    if [[ -f "$f" ]]; then cat "$f"; return 0; fi
+  done
+  usage
+}
+
+# ---------- argument parsing: options may appear anywhere; -rf bundles; --opt=value works; -- ends options ----------
+parse_args() {
+  local a i
+  while (( $# )); do
+    a="$1"; shift
+    case "$a" in
+      --)              ARGS+=("$@"); break ;;
+      -n|--dry-run)    DRY_RUN=1 ;;
+      -v|--verbose)    VERBOSE=1 ;;
+      -q|--quiet)      QUIET=1 ;;
+      -h|--help)       HELP=1 ;;
+      -V|--version)    printf 'git-grove %s\n' "$VERSION"; exit 0 ;;
+      -r|--recursive)  RECURSIVE=1 ;;
+      -f|--force)      FORCE=1 ;;
+      --apply)         APPLY=1 ;;
+      --print-path)    PRINT_PATH=1 ;;
+      --no-track)      NO_TRACK=1 ;;
+      --json)          JSON=1 ;;
+      --pull)          PULL=1 ;;
+      --rebase)        PULL_MODE=rebase ;;
+      --ff-only)       PULL_MODE=ff-only ;;
+      --from)          [[ $# -gt 0 ]] || die "--from needs a parent branch" 2; FROM="$1"; shift ;;
+      --from=*)        FROM="${a#--from=}" ;;
+      -[!-]?*)         for (( i=${#a}-1; i>=1; i-- )); do set -- "-${a:i:1}" "$@"; done ;;   # -rf -> -r -f
+      -*)              die "unknown option '$a' (try: git grove help)" 2 ;;
+      *)               ARGS+=("$a") ;;
+    esac
+  done
+}
+
+main() {
+  parse_args "$@"
+  local verb="${ARGS[0]:-help}"
+  if (( HELP )); then
+    if [[ "$verb" == help ]]; then cmd_help ""; else cmd_help "$verb"; fi
+    return 0
+  fi
+  case "$verb" in
+    help)  cmd_help "${ARGS[1]:-}" ;;
+    init)  cmd_init ;;
+    add|list|rm|go|up|down|path|sync)
+           GROVE="$(grove_root)"; "cmd_$verb" ;;
+    *)     usage >&2; die "unknown verb '$verb'" 2 ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
