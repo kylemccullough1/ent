@@ -86,6 +86,7 @@ git grove rm feature/thing-spike       # preview; add --apply when it says what 
 | `git grove merge all` | same, once per root | every root of this branch → this branch |
 | `git grove merge --abort` / `--continue` | `git merge --abort` · `git merge --continue` | from the worktree that is mid-merge |
 | `git grove finish <source> [target] --apply` | the merge above, then `git worktree remove` · `git config --unset groveParent` · `git branch -D` | preview unless `--apply`. Target defaults to the parent, else the branch you stand in. Refuses: protected source, standing inside it, roots under it, dirty source (`-f`). |
+| `git grove finish .` | the merge, then prints the target folder | from inside the root you are finishing; the `grove` shell function cds to the target and runs the rm |
 | `git grove finish --continue` | `git merge --continue`, then the removal | the source is found from `MERGE_HEAD` |
 | `git grove destroy <dir>` | `rm -rf <dir>` | type the folder name to confirm (`-y` skips). Refuses dirty worktrees unless `-f`. |
 

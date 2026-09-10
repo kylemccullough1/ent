@@ -60,6 +60,13 @@ function grove {
       $p = & git grove @args --print-path
       if ($LASTEXITCODE -eq 0) { Set-Location $p }
     }
+    'finish' {
+      if ($args[1] -eq '.') {        # finish the branch we stand in: merge, cd to the target, then remove it
+        $src = git symbolic-ref --short -q HEAD
+        $p = & git grove @args --print-path
+        if ($LASTEXITCODE -eq 0 -and $p) { Set-Location $p; & git grove rm $src --apply }
+      } else { & git grove @args }
+    }
     default { & git grove @args }
   }
 }
@@ -145,6 +152,7 @@ cd ../../../feature-x
 git grove merge all                      # pull every root of feature/x into it
 git grove finish feature/x-auth          # preview: merge auth in, then remove it
 git grove finish feature/x-auth --apply  # do it (worktree, folder, branch, groveParent all go)
+grove finish . --apply                  # same, from inside the root: merges, cds to the parent, removes it
 git grove merge --abort                  # mid-conflict: undo
 git grove merge --continue               # mid-conflict: after resolving and `git add`
 git grove destroy ../old-grove           # delete a whole grove; type its name to confirm

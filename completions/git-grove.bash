@@ -51,6 +51,14 @@ grove() {
       local p
       p="$(git grove "$@" --print-path)" || return $?
       cd "$p" ;;
+    finish)
+      if [[ "${2:-}" == . ]]; then      # finish the branch we stand in: merge, cd to the target, then remove it
+        local src p
+        src="$(git symbolic-ref --short -q HEAD)" || { git grove "$@"; return $?; }
+        p="$(git grove "$@" --print-path)" || return $?
+        [[ -n "$p" ]] || return 0        # preview, or nothing merged: stay put
+        cd "$p" && git grove rm "$src" --apply
+      else git grove "$@"; fi ;;
     *) git grove "$@" ;;
   esac
 }

@@ -253,10 +253,16 @@ row() {   # row <branch> <path> -> sets R_UP R_AHEAD R_BEHIND R_DIRTY R_MERGING
   fi
 }
 pad() { local s="$1" w="$2"; printf '%s' "$s"; local n=$(( w - ${#s} )); if (( n > 0 )); then printf '%*s' "$n" ''; fi; }
+swatch() {   # swatch <branch>: two cells in the tree's color (24-bit SGR), only when stdout is a color terminal
+  [[ -n "$O_RST" ]] || return 0
+  local h; h="$(color_of "$1")"; h="${h#\#}"
+  printf '\033[48;2;%d;%d;%dm  \033[0m ' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
 print_row() {   # print_row <prefix> <branch>
   local prefix="$1" b="$2" p rel status
   p="${L_PATH[$b]:-}"      # separate statement: in one `local a=.. b=$a` line, $a is expanded before a is set
   row "$b" "$p"
+  swatch "$b"
   if [[ -n "$p" ]]; then rel="${p#"$GROVE"/}/"; else rel="${O_DIM}(none)${O_RST}"; fi
   status=""
   if [[ -n "$R_UP" ]]; then
@@ -296,9 +302,9 @@ cmd_list() {
     for b in "${branches[@]}"; do
       row "$b" "${L_PATH[$b]:-}"
       if (( ! first )); then printf ','; fi; first=0
-      printf '\n  {"branch": %s, "parent": %s, "path": %s, "upstream": %s, "ahead": %s, "behind": %s, "dirty": %s, "merging": %s}' \
+      printf '\n  {"branch": %s, "parent": %s, "path": %s, "upstream": %s, "ahead": %s, "behind": %s, "dirty": %s, "merging": %s, "color": %s}' \
         "$(json_str "$b")" "$(json_or_null "${L_PARENT[$b]:-}")" "$(json_or_null "${L_PATH[$b]:-}")" \
-        "$(json_or_null "$R_UP")" "$R_AHEAD" "$R_BEHIND" "$R_DIRTY" "$R_MERGING"
+        "$(json_or_null "$R_UP")" "$R_AHEAD" "$R_BEHIND" "$R_DIRTY" "$R_MERGING" "$(json_str "$(color_of "$b")")"
     done
     printf '\n]\n'
     return 0
@@ -487,6 +493,10 @@ cmd_finish() {
     finish_tidy "$src"; return 0
   fi
   if [[ "${ARGS[1]:-}" == all ]]; then finish_all; return 0; fi
+  local self=0                      # finish . : the branch you stand in; merged here, removed by the shell wrapper
+  if [[ "${ARGS[1]:-}" == . ]]; then
+    self=1; ARGS[1]="$(cur_branch)"; [[ -n "${ARGS[1]}" ]] || die "finish . only works inside a worktree that is on a branch"
+  fi
   local src="${ARGS[1]:-}" tgt="${ARGS[2]:-}"
   [[ -n "$src" ]] || usage_die finish
   has_local "$src" || die "no branch '$src'"
@@ -498,7 +508,7 @@ cmd_finish() {
   [[ "$src" != "$tgt" ]] || die "source and target are the same branch"
   if is_protected "$src"; then die "'$src' is protected (the grove's main branch, or listed in protect); it cannot be finished"; fi
   local sp; sp="$(wt_path_for "$src")"
-  if inside "$cwd" "$sp"; then die "you are standing inside $sp. Run finish from the target's worktree (or anywhere else)."; fi
+  if (( ! self )) && inside "$cwd" "$sp"; then die "you are standing inside $sp. Run finish from the target's worktree, or use: git grove finish ."; fi
   local -a kids; mapfile -t kids < <(children_of "$src")
   (( ${#kids[@]} == 0 )) || die "$src still has root(s): $(join ' ' "${kids[@]}"). Finish or rm them first."
   if [[ -n "$sp" ]] && is_dirty "$sp"; then (( FORCE )) || die "$src has uncommitted changes in $sp. Commit them, or use --force to discard them."; fi
@@ -510,6 +520,12 @@ cmd_finish() {
     return 0
   fi
   do_merge "$src" "$tgt" || return 1
+  if (( self )); then                 # cannot remove the folder we stand in; hand the target path to the wrapper
+    local tp; tp="$(wt_path_for "$tgt")"
+    note "Merged $src into $tgt. You are standing inside $sp, so it was not removed."
+    if (( PRINT_PATH )); then printf '%s\n' "$tp"; else note "cd \"$tp\" && git grove rm $src --apply"; fi
+    return 0
+  fi
   finish_tidy "$src"
 }
 
@@ -780,11 +796,14 @@ U
     ;;
     finish) cat <<'U'
 usage: git grove finish <source> [target] [-y|--yes] [-f|--force] [--apply]
+       git grove finish . [target] [-y] [-f] [--apply]
        git grove finish all [-y] [-f] [--apply]
        git grove finish [<source>] --continue | --abort
 
 Merge <source> into [target], then remove <source>: worktree, folder, branch, groveParent.
 [target] defaults to the source's parent (a root), else the branch you are standing in.
+`finish .` finishes the branch you stand in: it merges, then prints the target's folder because it
+cannot delete the folder you are in; the `grove` shell function cds there and runs the rm for you.
 `finish all` does that for every root of the branch you stand in, deepest first (a root's own
 roots land in it before it lands in you), stopping at the first conflict.
 Preview by default; --apply does it. Refuses: a protected source, standing inside the source,

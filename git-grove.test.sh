@@ -323,6 +323,32 @@ git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-ok1 && fail "ok1 should
 expect_ok "abort the stuck merge" gin "$T/g3/feature-a" finish --abort
 expect_ok "rm the conflicting root" gin "$T/g3/feature-a" rm feature/a-zbad -f --apply
 
+step "finish . (from inside the source) and list swatch"
+expect_ok "root dot" gin "$T/g3/feature-a" add dot --from .
+commit_in "$T/g3/roots/feature-a/dot" dotc
+DOT="$(git -C "$T/g3" rev-parse feature/a-dot)"
+expect_ok "finish . preview" gin "$T/g3/roots/feature-a/dot" finish .
+git -C "$T/g3" merge-base --is-ancestor "$DOT" feature/a && fail "preview merged" || pass "finish . preview merges nothing"
+expect_ok "finish . --apply -y (no wrapper)" gin "$T/g3/roots/feature-a/dot" finish . -y --apply
+git -C "$T/g3" merge-base --is-ancestor "$DOT" feature/a && pass "merged into parent" || fail "not merged"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-dot && pass "source kept (we are standing in it)" || fail "source removed while inside"
+grep -q 'git grove rm feature/a-dot --apply' "$T/err" && pass "tells you the rm to run" || fail "rm hint: $(cat "$T/err")"
+expect_ok "finish . --print-path prints the target folder" gin "$T/g3/roots/feature-a/dot" finish . -y --apply --print-path
+check "$(W "$T/g3/feature-a")" "$(cat "$T/out")" "--print-path is the target path alone"
+expect_ok "rm dot afterwards" gin "$T/g3/feature-a" rm feature/a-dot --apply
+expect_ok "root dot2" gin "$T/g3/feature-a" add dot2 --from .
+commit_in "$T/g3/roots/feature-a/dot2" dot2c
+out="$(cd "$T/g3/roots/feature-a/dot2" && source "$(dirname "$G")/completions/git-grove.bash" && grove finish . -y --apply >/dev/null 2>&1; pwd -W 2>/dev/null || pwd -P)"
+check "$(W "$T/g3/feature-a")" "$out" "wrapper: finish . lands you in the parent"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-dot2 && fail "wrapper left the source branch" || pass "wrapper removed the source"
+[[ ! -d "$T/g3/roots/feature-a/dot2" ]] && pass "wrapper removed the source folder" || fail "folder left"
+expect_ok "list --json has color" gin "$T/g3" list --json
+grep -q '"branch": "feature/a", .*"color": "#[0-9a-f]\{6\}"' "$T/out" && pass "json color field" || fail "json color: $(grep '"feature/a"' "$T/out")"
+out="$(source "$G"; GROVE="$T/g3"; O_RST=x; swatch main | od -An -c | tr -d ' \n')"
+[[ "$out" == *'033[48;2;'* && "$out" == *'033[0m'* ]] && pass "swatch emits a 24-bit background block" || fail "swatch: $out"
+out="$(source "$G"; GROVE="$T/g3"; O_RST=; swatch main)"
+check "" "$out" "no swatch without a color terminal"
+
 step "destroy"
 expect_fail "destroy from inside" "standing inside" gin "$T/g3" destroy "$T/g3" -y
 echo dirty >"$T/g3/feature-a/dd.txt"
