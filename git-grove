@@ -18,7 +18,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- options (global; parsed once, allowed anywhere on the line) ----------
 DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 APPLY=0 PRINT_PATH=0 NO_TRACK=0 JSON=0
-PULL=0 PULL_MODE=ff-only FROM="" YES=0 MERGE_ABORT=0 MERGE_CONTINUE=0 MERGE_VERB=merge
+PULL=0 PULL_MODE=ff-only FROM="" YES=0 MERGE_ABORT=0 MERGE_CONTINUE=0 MERGE_VERB=merge SET_COLOR=""
+# Dark tints that work as a terminal background. Override: git config grove.palette "#hex #hex ..."
+PALETTE_DEFAULT="#1f2a44 #1e3a2a #3a1f3a #1f3a3a #3a2020 #3a341f #1f2a3a #3a2a1f"
 ARGS=()
 GROVE=""
 
@@ -484,6 +486,7 @@ cmd_finish() {
     fi
     finish_tidy "$src"; return 0
   fi
+  if [[ "${ARGS[1]:-}" == all ]]; then finish_all; return 0; fi
   local src="${ARGS[1]:-}" tgt="${ARGS[2]:-}"
   [[ -n "$src" ]] || usage_die finish
   has_local "$src" || die "no branch '$src'"
@@ -508,6 +511,86 @@ cmd_finish() {
   fi
   do_merge "$src" "$tgt" || return 1
   finish_tidy "$src"
+}
+
+# finish all: absorb every root of the branch you stand in. Deepest first, so a root's own roots land in it
+# before it lands in you. Each step is merge + remove; the first conflict stops the run with the rest intact.
+collect_finish_order() { local k; while read -r k; do if [[ -n "$k" ]]; then collect_finish_order "$k"; FIN_ORDER+=("$k"); fi; done < <(children_of "$1"); }
+finish_all() {
+  local tgt; tgt="$(cur_branch)"; [[ -n "$tgt" ]] || die "run 'finish all' from inside the worktree that should absorb its roots"
+  FIN_ORDER=()
+  collect_finish_order "$tgt"
+  if (( ${#FIN_ORDER[@]} == 0 )); then note "$tgt has no roots."; return 0; fi
+  local b sp
+  for b in "${FIN_ORDER[@]}"; do
+    if is_protected "$b"; then die "'$b' is protected; it cannot be finished"; fi
+    sp="$(wt_path_for "$b")"
+    if [[ -n "$sp" ]] && is_dirty "$sp" && (( ! FORCE )); then die "$b has uncommitted changes in $sp. Commit them, or use --force to discard them."; fi
+  done
+  if (( ! APPLY )); then
+    note "Would finish, in this order (each merged into its parent, then removed):"
+    for b in "${FIN_ORDER[@]}"; do printf '  %s -> %s\n' "$b" "$(parent_of "$b")"; done
+    note "Nothing changed. Re-run with --apply to do it."
+    return 0
+  fi
+  for b in "${FIN_ORDER[@]}"; do
+    do_merge "$b" "$(parent_of "$b")" || return 1
+    finish_tidy "$b"
+  done
+  note "All roots of $tgt finished."
+}
+
+# ---------- color / paint: one color per tree, shown by the terminal ----------
+tree_of() {   # tree_of <branch>: walk groveParent up to the top-level tree
+  local b="$1" p
+  while p="$(parent_of "$b")" && [[ -n "$p" ]]; do b="$p"; done
+  printf '%s' "$b"
+}
+color_of() {  # color_of <branch>: the tree's pinned branch.<tree>.groveColor, else a stable hash into the palette
+  local tree c; tree="$(tree_of "$1")"
+  c="$(g config --get "branch.$tree.groveColor" 2>/dev/null || true)"
+  if [[ -n "$c" ]]; then printf '%s' "$c"; return 0; fi
+  local pal_str; pal_str="$(g config --get grove.palette 2>/dev/null || true)"
+  local -a pal; read -r -a pal <<<"${pal_str:-$PALETTE_DEFAULT}"
+  local n; n="$(printf '%s' "$tree" | cksum | cut -d' ' -f1)"     # same name -> same color, on every machine
+  printf '%s' "${pal[$(( n % ${#pal[@]} ))]}"
+}
+hex_to_rgb() { local h="${1#\#}"; printf 'rgb:%s/%s/%s' "${h:0:2}" "${h:2:2}" "${h:4:2}"; }   # xterm colour spec
+cmd_color() {
+  local b="${ARGS[1]:-}"
+  if [[ -z "$b" ]]; then b="$(cur_branch)"; [[ -n "$b" ]] || die "not inside a worktree; pass a branch"; fi
+  has_local "$b" || die "no branch '$b'"
+  if [[ -n "$SET_COLOR" ]]; then
+    [[ "$SET_COLOR" =~ ^#[0-9a-fA-F]{6}$ ]] || die "--set wants a #rrggbb color, got '$SET_COLOR'"
+    run g config "branch.$(tree_of "$b").groveColor" "$SET_COLOR"
+    return 0
+  fi
+  printf '%s\n' "$(color_of "$b")"
+}
+# paint: write the escape sequences that colour this terminal for the tree you stand in (or reset it outside
+# a grove). Meant to run from the prompt: bash PROMPT_COMMAND, PowerShell prompt(). Prints nothing where it
+# would not work: NO_COLOR, `git config grove.paint false`, or JetBrains' terminal (no OSC 11 support).
+osc() { printf '\033]%s\a' "$1"; }
+cmd_paint() {
+  [[ -z "${NO_COLOR:-}" ]] || return 0
+  [[ "${TERMINAL_EMULATOR:-}" != JetBrains-JediTerm ]] || return 0
+  [[ "$(git config --get grove.paint 2>/dev/null || true)" != false ]] || return 0
+  local c="" b spec
+  if GROVE="$(grove_root 2>/dev/null)"; then
+    b="$(cur_branch)"; if [[ -n "$b" ]]; then c="$(color_of "$b")"; fi
+  fi
+  if [[ -n "$c" ]]; then
+    spec="$(hex_to_rgb "$c")"
+    osc "11;$spec"                                              # background (mintty, Windows Terminal, VS Code)
+    if [[ -n "${WT_SESSION:-}" ]]; then osc "4;264;$spec"; fi   # Windows Terminal: palette index 264 is the tab background
+    (( VERBOSE )) && note "paint: $b -> $c"
+  else
+    local reset; reset="$(git config --get grove.paintReset 2>/dev/null || true)"
+    if [[ -n "$reset" ]]; then osc "11;$(hex_to_rgb "$reset")"; else osc "111"; fi   # OSC 111 = back to the theme's background
+    if [[ -n "${WT_SESSION:-}" ]]; then printf '\033[2;263;264,|'; fi              # Windows Terminal: default tab colours
+    (( VERBOSE )) && note "paint: reset"
+  fi
+  return 0
 }
 
 # ---------- destroy ----------
@@ -602,16 +685,18 @@ usage: git grove <verb> [options]
   list [--json]                              every branch, roots drawn under their parents
   rm <branch|path> [-r] [-f] [--apply]       preview a removal; --apply does it
   merge <target|parent|siblings|all>         show the diff, confirm, git merge; --abort / --continue
-  finish <source> [target] [--apply]         merge <source> in, then remove it (worktree, folder, branch)
+  finish <source|all> [target] [--apply]     merge <source> in, then remove it (worktree, folder, branch)
   destroy <grove-dir> [-f]                   delete a whole grove, after typing its name
   go <branch> | up | down <name>             print a worktree path (the `grove` shell function cds)
   path [branch]                              the grove's top folder, or a branch's folder
   sync [--pull [--rebase]]                   fetch --all --prune, optionally fast-forward each worktree
+  color [branch] [--set #rrggbb]             the tree's color (roots share their tree's); --set pins it
+  paint                                      escape codes that tint this terminal for the tree you stand in
   help [verb]                                the cheat sheet, or one verb's usage
 
 options: -n/--dry-run  -v/--verbose  -q/--quiet  -y/--yes  -r/--recursive  -f/--force  --apply
          --print-path  --no-track  --from <parent>  --json  --pull  --ff-only  --rebase
-         --abort  --continue  -V/--version
+         --abort  --continue  --set <#rrggbb>  -V/--version
 USAGE
 }
 usage_for() {
@@ -695,10 +780,13 @@ U
     ;;
     finish) cat <<'U'
 usage: git grove finish <source> [target] [-y|--yes] [-f|--force] [--apply]
+       git grove finish all [-y] [-f] [--apply]
        git grove finish [<source>] --continue | --abort
 
 Merge <source> into [target], then remove <source>: worktree, folder, branch, groveParent.
 [target] defaults to the source's parent (a root), else the branch you are standing in.
+`finish all` does that for every root of the branch you stand in, deepest first (a root's own
+roots land in it before it lands in you), stopping at the first conflict.
 Preview by default; --apply does it. Refuses: a protected source, standing inside the source,
 a source that still has roots, or uncommitted changes in the source (-f discards them).
 After resolving a conflict, run --continue from the target's worktree; the source is found
@@ -711,6 +799,28 @@ usage: git grove destroy <grove-dir> [-f|--force] [-y|--yes]
 Permanently deletes a whole grove: .bare, every worktree, every unpushed branch.
 Lists worktrees with uncommitted changes and refuses unless -f. Asks you to type the folder
 name (-y skips that, for scripts). Refuses when run from inside the grove.
+U
+    ;;
+    color) cat <<'U'
+usage: git grove color [branch] [--set #rrggbb]
+
+Prints the color for a branch's tree (default: the branch you stand in). Roots share their
+tree's color. Without --set the color is a stable hash of the tree name into the palette, so
+feature/x is the same color in every grove and on every machine. --set pins the tree's color
+in git config branch.<tree>.groveColor. Palette: git config grove.palette "#hex #hex ...".
+U
+    ;;
+    paint) cat <<'U'
+usage: git grove paint
+
+Writes the terminal escape sequences that set this terminal's background to the tree's color
+(and, in Windows Terminal, the tab color), or reset both when you are outside a grove. Wire it
+into your prompt so it runs after every cd:
+  bash        PROMPT_COMMAND='git grove paint'   (the sourced git-grove.bash does this)
+  PowerShell  function prompt { Write-Host -NoNewline (& git grove paint); "PS $PWD> " }
+Silent where it cannot work: NO_COLOR set, `git config grove.paint false`, or JetBrains' terminal.
+If your terminal does not restore its theme on reset, pin the theme's background with
+`git config --global grove.paintReset "#0c0c0c"`.
 U
     ;;
     help) usage ;;
@@ -754,6 +864,8 @@ parse_args() {
       --continue)      MERGE_CONTINUE=1 ;;
       --from)          [[ $# -gt 0 ]] || die "--from needs a parent branch" 2; FROM="$1"; shift ;;
       --from=*)        FROM="${a#--from=}" ;;
+      --set)           [[ $# -gt 0 ]] || die "--set needs a #rrggbb color" 2; SET_COLOR="$1"; shift ;;
+      --set=*)         SET_COLOR="${a#--set=}" ;;
       -[!-]?*)         for (( i=${#a}-1; i>=1; i-- )); do set -- "-${a:i:1}" "$@"; done ;;   # -rf -> -r -f
       -*)              die "unknown option '$a' (try: git grove help)" 2 ;;
       *)               ARGS+=("$a") ;;
@@ -772,7 +884,8 @@ main() {
     help)  cmd_help "${ARGS[1]:-}" ;;
     init)  cmd_init ;;
     destroy) cmd_destroy ;;
-    add|list|rm|merge|finish|go|up|down|path|sync)
+    paint) cmd_paint ;;
+    add|list|rm|merge|finish|go|up|down|path|sync|color)
            GROVE="$(grove_root)"; "cmd_$verb" ;;
     *)     usage >&2; die "unknown verb '$verb'" 2 ;;
   esac

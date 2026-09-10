@@ -153,3 +153,32 @@ git grove destroy ../old-grove           # delete a whole grove; type its name t
 `merge` never removes anything; `finish` is merge plus the tidy-up. Both refuse a target with
 uncommitted changes and stop at the first conflict, leaving git's normal conflict state for you to
 resolve. Pass `-y` to skip the confirmation (scripts, Claude).
+
+## One color per tree
+
+Every tree gets a color — a stable hash of its name, so `feature/x` is the same shade in every grove and
+on every machine — and its roots share it. `git grove paint` prints the escape sequences that set the
+terminal background (and the tab, in Windows Terminal) to that color, or reset them when you leave the
+grove. Wire it into your prompt so it runs after every `cd`:
+
+```bash
+# bash: sourcing completions/git-grove.bash already does this
+PROMPT_COMMAND="git grove paint${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+```
+
+```powershell
+# PowerShell $PROFILE
+function prompt {
+  Write-Host -NoNewline (& git grove paint)
+  "PS $($executionContext.SessionState.Path.CurrentLocation)> "
+}
+```
+
+- Pin a tree's color: `git grove color feature/x --set '#1f2a44'`.
+- Your own palette: `git config grove.palette "#1f2a44 #1e3a2a ..."` (dark tints work best).
+- Off: `git config --global grove.paint false`, or set `NO_COLOR`.
+- Supported: Windows Terminal (background + tab), Git Bash's mintty window, VS Code's terminal. Not
+  supported by JetBrains' terminal (open request IJPL-218303); `paint` detects it and prints nothing.
+- If leaving a grove does not restore your theme's background, pin it:
+  `git config --global grove.paintReset "#0c0c0c"` (Windows Terminal's default dark background).
+- A tab started with `wt --tabColor` ignores the tab sequence.

@@ -4,8 +4,8 @@
 # git's own completion looks for a function named _git_<subcommand> when completing
 # `git <subcommand> ...`, so defining _git_grove is all it takes to complete `git grove <TAB>`.
 
-_git_grove_verbs="init add list rm merge finish destroy go up down path sync help"
-_git_grove_opts="--dry-run --verbose --quiet --help --version --recursive --force --apply --print-path --no-track --from --json --pull --ff-only --rebase --yes --abort --continue"
+_git_grove_verbs="init add list rm merge finish destroy go up down path sync color paint help"
+_git_grove_opts="--dry-run --verbose --quiet --help --version --recursive --force --apply --print-path --no-track --from --json --pull --ff-only --rebase --yes --abort --continue --set"
 
 _git_grove_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
 
@@ -21,7 +21,7 @@ _git_grove_complete() {
     COMPREPLY=( $(compgen -W "$_git_grove_opts" -- "$cur") ); return
   fi
   case "$prev" in
-    --from|go|rm|path|help|merge|finish)
+    --from|go|rm|path|help|merge|finish|color)
       [[ "$prev" == help ]] && { COMPREPLY=( $(compgen -W "$_git_grove_verbs" -- "$cur") ); return; }
       COMPREPLY=( $(compgen -W "$(_git_grove_branches)" -- "$cur") ); return ;;
   esac
@@ -56,3 +56,8 @@ grove() {
 }
 _grove_fn() { _git_grove_complete 1; }
 complete -F _grove_fn grove
+
+# paint the terminal for the tree you stand in, after every prompt. Turn off: git config --global grove.paint false
+if [[ "${PROMPT_COMMAND:-}" != *"git grove paint"* ]]; then
+  PROMPT_COMMAND="git grove paint${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+fi

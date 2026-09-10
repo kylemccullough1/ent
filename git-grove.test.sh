@@ -288,6 +288,41 @@ expect_ok "finish a tree into the branch you stand in" gin "$T/g3/main" finish f
 git -C "$T/g3" show-ref --verify -q refs/heads/feature/b && fail "feature/b left" || pass "tree finished into main"
 git -C "$T/g3" merge-base --is-ancestor "$(git -C "$T/g3" rev-parse main)" main && pass "main advanced" || fail "main"
 
+step "finish all"
+expect_ok "clear r1 (has a sibling-merge commit only it knows)" gin "$T/g3/feature-a" rm feature/a-r1 -f --apply
+expect_ok "clear r2" gin "$T/g3/feature-a" rm feature/a-r2 --apply
+expect_ok "clear p (left from the finish step)" gin "$T/g3/feature-a" rm feature/a-p --apply
+expect_ok "root r1" gin "$T/g3/feature-a" add r1 --from .
+expect_ok "sub-root s1 under r1" gin "$T/g3/roots/feature-a/r1" add s1 --from .
+expect_ok "root r2" gin "$T/g3/feature-a" add r2 --from .
+commit_in "$T/g3/roots/feature-a-r1/s1" s1c; commit_in "$T/g3/roots/feature-a/r1" r1c2; commit_in "$T/g3/roots/feature-a/r2" r2c2
+S1="$(git -C "$T/g3" rev-parse feature/a-r1-s1)"; R2="$(git -C "$T/g3" rev-parse feature/a-r2)"
+expect_ok "finish all preview" gin "$T/g3/feature-a" finish all
+check "feature/a-r1-s1 -> feature/a-r1
+feature/a-r1 -> feature/a
+feature/a-r2 -> feature/a" "$(sed 's/^  //' "$T/out")" "preview lists deepest first"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-r1-s1 && pass "preview changed nothing" || fail "preview removed"
+echo dirty >"$T/g3/roots/feature-a/r2/d.txt"
+expect_fail "finish all refuses a dirty root" "uncommitted changes" gin "$T/g3/feature-a" finish all -y --apply
+rm "$T/g3/roots/feature-a/r2/d.txt"
+expect_fail "finish all from a branch without roots is fine, from the grove root is not" "inside the worktree" gin "$T/g3" finish all -y --apply
+expect_ok "finish all --apply -y" gin "$T/g3/feature-a" finish all -y --apply
+git -C "$T/g3" merge-base --is-ancestor "$S1" feature/a && pass "sub-root's work reached the top" || fail "s1 not on feature/a"
+git -C "$T/g3" merge-base --is-ancestor "$R2" feature/a && pass "r2 merged" || fail "r2 not merged"
+check "" "$(git -C "$T/g3" for-each-ref --format='%(refname:short)' 'refs/heads/feature/a-*')" "every root branch removed"
+[[ ! -d "$T/g3/roots" ]] && pass "roots/ folder gone" || fail "roots/ left: $(ls "$T/g3/roots")"
+expect_ok "finish all with nothing to do" gin "$T/g3/feature-a" finish all -y --apply
+grep -q 'has no roots' "$T/err" && pass "no-roots message" || fail "no-roots"
+expect_ok "root ok1" gin "$T/g3/feature-a" add ok1 --from .; commit_in "$T/g3/roots/feature-a/ok1" ok1c
+expect_ok "root zbad (sorts after ok1)" gin "$T/g3/feature-a" add zbad --from .
+(cd "$T/g3/roots/feature-a/zbad" && echo b >k.txt && git add k.txt && git commit -qm bad)
+(cd "$T/g3/feature-a" && echo a >k.txt && git add k.txt && git commit -qm a)
+expect_fail "finish all stops at the first conflict" "conflicts merging" gin "$T/g3/feature-a" finish all -y --apply
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-zbad && pass "conflicting root kept" || fail "zbad removed"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-ok1 && fail "ok1 should have been finished first" || pass "roots before the conflict were finished"
+expect_ok "abort the stuck merge" gin "$T/g3/feature-a" finish --abort
+expect_ok "rm the conflicting root" gin "$T/g3/feature-a" rm feature/a-zbad -f --apply
+
 step "destroy"
 expect_fail "destroy from inside" "standing inside" gin "$T/g3" destroy "$T/g3" -y
 echo dirty >"$T/g3/feature-a/dd.txt"
@@ -297,6 +332,40 @@ expect_fail "destroy needs a terminal to type the name" "no terminal" gin "$T" d
 expect_ok "destroy -f -y" gin "$T" destroy g3 -f -y
 [[ ! -d "$T/g3" ]] && pass "grove folder deleted" || fail "grove folder left"
 expect_fail "destroy a non-grove" "not a grove" gin "$T" destroy src -y
+
+step "color / paint"
+c1="$(gin "$T/g1/main" color feature/ok)"
+[[ "$c1" =~ ^#[0-9a-f]{6}$ ]] && pass "color is #rrggbb ($c1)" || fail "color format: $c1"
+check "$c1" "$(gin "$T/g1/main" color feature/ok)" "color is stable"
+check "$c1" "$(gin "$T/g1/main" color feature/ok-spike)" "root inherits its tree's color"
+check "$c1" "$(gin "$T/g1/roots/feature-ok/spike" color)" "color with no argument = the branch you stand in"
+expect_fail "color of unknown branch" "no branch" gin "$T/g1/main" color feature/nope
+expect_fail "--set rejects a bad color" "#rrggbb" gin "$T/g1/main" color feature/ok --set red
+expect_ok "--set pins the tree color" gin "$T/g1/main" color feature/ok --set '#123456'
+check "#123456" "$(gin "$T/g1/roots/feature-ok/spike" color)" "pinned color reaches the roots"
+check "#123456" "$(git -C "$T/g1" config branch.feature/ok.groveColor)" "pin stored on the tree, not the root"
+expect_ok "custom palette" bash -c "git -C '$T/g1' config grove.palette '#010101 #020202' && cd '$T/g1/main' && bash '$G' color main"
+[[ "$(cat "$T/out")" == "#010101" || "$(cat "$T/out")" == "#020202" ]] && pass "palette override used" || fail "palette: $(cat "$T/out")"
+git -C "$T/g1" config --unset grove.palette
+paint() { (cd "$1" && shift && env -u NO_COLOR "$@" bash "$G" paint | od -An -c | tr -d ' \n'); }
+p="$(paint "$T/g1/roots/feature-ok/spike" WT_SESSION=x)"
+[[ "$p" == *'033]11;rgb:12/34/56\a'* ]] && pass "paint sets the background (OSC 11)" || fail "paint bg: $p"
+[[ "$p" == *'033]4;264;rgb:12/34/56\a'* ]] && pass "paint sets the Windows Terminal tab (OSC 4;264)" || fail "paint tab: $p"
+p="$(paint "$T/g1/feature-ok" TERM=xterm)"
+[[ "$p" == *'033]11;'* && "$p" != *'264'* ]] && pass "no tab sequence outside Windows Terminal" || fail "tab seq leaked: $p"
+p="$(paint "$T" WT_SESSION=x)"
+[[ "$p" == *'033]111\a'* && "$p" == *'033[2;263;264,|'* ]] && pass "paint resets outside a grove" || fail "reset: $p"
+p="$(paint "$T/g1" WT_SESSION=x)"
+[[ "$p" == *'033]111\a'* ]] && pass "paint resets at the grove root (no branch)" || fail "root reset: $p"
+check "" "$(paint "$T/g1/feature-ok" TERMINAL_EMULATOR=JetBrains-JediTerm)" "silent in JetBrains' terminal"
+check "" "$(cd "$T/g1/feature-ok" && bash "$G" paint | od -An -c | tr -d ' \n')" "silent under NO_COLOR"
+git -C "$T/g1" config --global grove.paint false
+check "" "$(paint "$T/g1/feature-ok")" "silent when grove.paint=false"
+git -C "$T/g1" config --global --unset grove.paint
+git -C "$T/g1" config --global grove.paintReset '#0c0c0c'
+p="$(paint "$T")"
+[[ "$p" == *'033]11;rgb:0c/0c/0c\a'* ]] && pass "paintReset pins the reset color" || fail "paintReset: $p"
+git -C "$T/g1" config --global --unset grove.paintReset
 
 step "help / version / usage errors"
 expect_ok "help" bash "$G" help
