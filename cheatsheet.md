@@ -75,3 +75,20 @@ git grove rm feature/thing-spike       # preview; add --apply when it says what 
   effect once it lands there.
 - **Windows:** the `.git` pointer must be one ASCII line. PowerShell's `echo >` writes UTF-16 + BOM
   and breaks it — that is why `init` uses `printf` in bash.
+
+## Merging and finishing (v2)
+
+| Command | Raw git | Notes |
+|---|---|---|
+| `git grove merge <target>` | in `<target>`'s folder: `git diff --stat target...source` · `git diff target...source` · `git merge --no-edit <source>` | run from the source's worktree. Refuses a dirty or mid-merge target. Asks, or `-y`. |
+| `git grove merge parent` | same | (in a root) target = the recorded parent |
+| `git grove merge siblings` | same, once per sibling | (in a root) every sibling root → this root; stops at the first conflict |
+| `git grove merge all` | same, once per root | every root of this branch → this branch |
+| `git grove merge --abort` / `--continue` | `git merge --abort` · `git merge --continue` | from the worktree that is mid-merge |
+| `git grove finish <source> [target] --apply` | the merge above, then `git worktree remove` · `git config --unset groveParent` · `git branch -D` | preview unless `--apply`. Target defaults to the parent, else the branch you stand in. Refuses: protected source, standing inside it, roots under it, dirty source (`-f`). |
+| `git grove finish --continue` | `git merge --continue`, then the removal | the source is found from `MERGE_HEAD` |
+| `git grove destroy <dir>` | `rm -rf <dir>` | type the folder name to confirm (`-y` skips). Refuses dirty worktrees unless `-f`. |
+
+Conflicts: the merge stops with markers in the files and `MERGE_HEAD` set; your prompt shows
+`(branch|MERGING)` and `list` shows a `MERGING` badge. Resolve, `git add`, then `--continue` — or
+`--abort` to go back to before the merge.

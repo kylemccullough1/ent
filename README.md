@@ -134,3 +134,22 @@ parsed, never sourced.
 [brightdigit/git-trees](https://github.com/brightdigit/git-trees) uses the same `.bare` + pointer
 layout and a `--print-path` wrapper. Branch parentage in local git metadata is how git-spice,
 Graphite, and git-branchless do it too.
+
+## Merging and finishing
+
+```bash
+cd roots/feature-x/auth
+git grove merge parent                   # show the diff, confirm, merge feature/x-auth into feature/x
+git grove merge siblings                 # pull every sibling root into this one
+cd ../../../feature-x
+git grove merge all                      # pull every root of feature/x into it
+git grove finish feature/x-auth          # preview: merge auth in, then remove it
+git grove finish feature/x-auth --apply  # do it (worktree, folder, branch, groveParent all go)
+git grove merge --abort                  # mid-conflict: undo
+git grove merge --continue               # mid-conflict: after resolving and `git add`
+git grove destroy ../old-grove           # delete a whole grove; type its name to confirm
+```
+
+`merge` never removes anything; `finish` is merge plus the tidy-up. Both refuse a target with
+uncommitted changes and stop at the first conflict, leaving git's normal conflict state for you to
+resolve. Pass `-y` to skip the confirmation (scripts, Claude).

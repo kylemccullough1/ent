@@ -12,13 +12,13 @@
 # "git grove help" prints the cheat sheet. Bash 4+ and git are the only dependencies.
 set -euo pipefail
 
-VERSION=0.1.0
+VERSION=0.2.0
 ROOTS_DIR=roots
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- options (global; parsed once, allowed anywhere on the line) ----------
 DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 APPLY=0 PRINT_PATH=0 NO_TRACK=0 JSON=0
-PULL=0 PULL_MODE=ff-only FROM=""
+PULL=0 PULL_MODE=ff-only FROM="" YES=0 MERGE_ABORT=0 MERGE_CONTINUE=0 MERGE_VERB=merge
 ARGS=()
 GROVE=""
 
@@ -362,20 +362,180 @@ cmd_rm() {
     return 0
   fi
 
-  for b in "${RM_PLAN[@]}"; do
-    p="$(wt_path_for "$b")"
-    if [[ -n "$p" ]]; then
-      if (( FORCE )); then run g worktree remove --force "$p"; else run g worktree remove "$p"; fi
-      if [[ -d "$p" ]]; then say "rm -rf $p     # git unregistered it but Windows kept the folder"; rm -rf "$p"; fi
-    fi
-    if [[ -n "$(parent_of "$b")" ]]; then run g config --unset "branch.$b.groveParent"; fi   # before -D: git drops the section with the branch
-    run g branch -D "$b"                                    # rule 4 already proved reachability; -d would re-check against the wrong HEAD
-    if [[ -n "$p" && "$p" == "$GROVE/$ROOTS_DIR/"* ]]; then                    # empty bucket, then empty roots/
-      rmdir "$(dirname "$p")" 2>/dev/null || true
-      rmdir "$GROVE/$ROOTS_DIR" 2>/dev/null || true
-    fi
-    note "Removed $b."
+  for b in "${RM_PLAN[@]}"; do remove_branch "$b"; done
+}
+# remove_branch <branch>: worktree, leftover folder, groveParent, branch, empty bucket. Callers have done the checks.
+remove_branch() {
+  local b="$1" p; p="$(wt_path_for "$b")"
+  if [[ -n "$p" ]]; then
+    if (( FORCE )); then run g worktree remove --force "$p"; else run g worktree remove "$p"; fi
+    if [[ -d "$p" ]]; then say "rm -rf $p     # git unregistered it but Windows kept the folder"; rm -rf "$p"; fi
+  fi
+  if [[ -n "$(parent_of "$b")" ]]; then run g config --unset "branch.$b.groveParent"; fi   # before -D: git drops the section with the branch
+  run g branch -D "$b"                                    # reachability was proved by the caller; -d would re-check against the wrong HEAD
+  if [[ -n "$p" && "$p" == "$GROVE/$ROOTS_DIR/"* ]]; then                    # empty bucket, then empty roots/
+    rmdir "$(dirname "$p")" 2>/dev/null || true
+    rmdir "$GROVE/$ROOTS_DIR" 2>/dev/null || true
+  fi
+  note "Removed $b."
+}
+
+# ---------- merge / finish ----------
+confirm() {   # confirm <question>: -y answers yes; otherwise ask on a terminal; refuse without one
+  if (( YES )); then return 0; fi
+  [[ -t 0 ]] || die "$1 -- no terminal to ask on; pass -y/--yes to confirm"
+  local a; read -r -p "$1 [y/N] " a
+  if [[ "$a" =~ ^[yY]$ ]]; then return 0; fi
+  note "Cancelled."; return 1
+}
+is_dirty()         { [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]]; }
+merge_head_of()    { local f; f="$(git -C "$1" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null)"; if [[ -f "$f" ]]; then cat "$f"; fi; }
+branch_at_commit() { g for-each-ref --points-at "$1" --format='%(refname:short)' refs/heads; }
+inside()           { [[ -n "$1" && -n "$2" ]] && [[ "$1" == "$2" || "$1" == "$2/"* ]]; }   # inside <cwd> <path>
+
+# do_merge <source> <target>: show what would come in, confirm, git merge in the target's worktree.
+# Returns 0 when merged or already up to date, 1 on conflict (left for the user) or when cancelled.
+do_merge() {
+  local src="$1" tgt="$2" tp
+  [[ "$src" != "$tgt" ]] || die "cannot merge $src into itself"
+  has_local "$src" || die "no branch '$src'"
+  tp="$(wt_path_for "$tgt")"; [[ -n "$tp" ]] || die "$tgt has no worktree to merge into. git grove add $tgt"
+  if [[ -n "$(merge_head_of "$tp")" ]]; then die "$tgt is already in the middle of a merge. From $tp run: git grove $MERGE_VERB --continue (or --abort)"; fi
+  if is_dirty "$tp"; then die "$tgt has uncommitted changes in $tp. Commit them before merging into it."; fi
+  if g merge-base --is-ancestor "$src" "$tgt"; then note "$tgt already contains everything on $src; nothing to merge."; return 0; fi
+  note "Changes $src would bring into $tgt:"
+  run git --no-pager -C "$tp" diff --stat "$tgt...$src"
+  run git --no-pager -C "$tp" diff "$tgt...$src"
+  confirm "Merge $src into $tgt?" || return 1
+  if (( DRY_RUN )); then say "$(fmt_cmd git -C "$tp" merge --no-edit "$src")"; note "(dry run: not merged)"; return 0; fi
+  if run git -C "$tp" merge --no-edit "$src"; then note "Merged $src into $tgt."; return 0; fi
+  if [[ -n "$(merge_head_of "$tp")" ]]; then
+    warn "conflicts merging $src into $tgt. Conflicted files:"
+    git -C "$tp" diff --name-only --diff-filter=U >&2
+    note "Resolve them in $tp, 'git add' each file, then from there: git grove $MERGE_VERB --continue   (or --abort to undo)"
+    return 1
+  fi
+  die "git merge failed in $tp (see above)"
+}
+merge_abort_or_continue() {   # shared by merge and finish; returns 0 if it handled --abort/--continue
+  local cwd; cwd="$(cur_worktree)"
+  if (( MERGE_ABORT )); then
+    [[ -n "$cwd" ]] || die "run --abort from inside the worktree that is mid-merge"
+    [[ -n "$(merge_head_of "$cwd")" ]] || die "no merge in progress in $cwd"
+    run git -C "$cwd" merge --abort
+    note "Merge aborted; $cwd is back to its pre-merge state."
+    return 0
+  fi
+  if (( MERGE_CONTINUE )); then
+    [[ -n "$cwd" ]] || die "run --continue from inside the worktree that is mid-merge"
+    MERGED_FROM="$(merge_head_of "$cwd")"; [[ -n "$MERGED_FROM" ]] || die "no merge in progress in $cwd"
+    run env GIT_EDITOR=true git -C "$cwd" merge --continue    # GIT_EDITOR=true accepts git's own merge message
+    note "Merge completed in $cwd."
+    return 0
+  fi
+  return 1
+}
+cmd_merge() {
+  MERGE_VERB=merge
+  if merge_abort_or_continue; then return 0; fi
+  local what="${ARGS[1]:-}"; [[ -n "$what" ]] || usage_die merge
+  local src; src="$(cur_branch)"; [[ -n "$src" ]] || die "run merge from inside a worktree that is on a branch"
+  local T=$'\t' par k
+  local -a pairs=()      # "source<TAB>target", merged in order, stopping at the first conflict
+  case "$what" in
+    parent)
+      par="$(parent_of "$src")"; [[ -n "$par" ]] || die "$src is a tree; it has no parent. Name a target branch instead."
+      pairs+=("$src$T$par") ;;
+    siblings)
+      par="$(parent_of "$src")"; [[ -n "$par" ]] || die "$src is a tree; only roots have siblings"
+      while read -r k; do if [[ -n "$k" && "$k" != "$src" ]]; then pairs+=("$k$T$src"); fi; done < <(children_of "$par")
+      if (( ${#pairs[@]} == 0 )); then note "$src has no sibling roots."; return 0; fi ;;
+    all)
+      while read -r k; do if [[ -n "$k" ]]; then pairs+=("$k$T$src"); fi; done < <(children_of "$src")
+      if (( ${#pairs[@]} == 0 )); then note "$src has no roots."; return 0; fi ;;
+    *)
+      has_local "$what" || die "no branch '$what'"
+      pairs+=("$src$T$what") ;;
+  esac
+  local pr
+  for pr in "${pairs[@]}"; do
+    do_merge "${pr%%$T*}" "${pr#*$T}" || return 1
   done
+}
+finish_tidy() {   # after the merge landed: remove the source, honouring rule 3 unless --force
+  local src="$1" sp; sp="$(wt_path_for "$src")"
+  if [[ -n "$sp" ]] && is_dirty "$sp" && (( ! FORCE )); then
+    die "merged, but $src has uncommitted changes in $sp so it was kept. Commit or discard them, then: git grove rm $src --apply"
+  fi
+  remove_branch "$src"
+  note "Finished $src."
+}
+cmd_finish() {
+  MERGE_VERB=finish
+  local cwd; cwd="$(cur_worktree)"
+  if (( MERGE_ABORT )); then merge_abort_or_continue; return 0; fi
+  if (( MERGE_CONTINUE )); then
+    merge_abort_or_continue
+    local src="${ARGS[1]:-}"
+    if [[ -z "$src" ]]; then
+      local -a cands; mapfile -t cands < <(branch_at_commit "$MERGED_FROM")
+      (( ${#cands[@]} == 1 )) || die "cannot tell which branch was merged (candidates: ${cands[*]:-none}). Pass it: git grove finish <source> --continue"
+      src="${cands[0]}"
+    fi
+    finish_tidy "$src"; return 0
+  fi
+  local src="${ARGS[1]:-}" tgt="${ARGS[2]:-}"
+  [[ -n "$src" ]] || usage_die finish
+  has_local "$src" || die "no branch '$src'"
+  if [[ -z "$tgt" ]]; then
+    tgt="$(parent_of "$src")"
+    [[ -n "$tgt" ]] || tgt="$(cur_branch)"
+    [[ -n "$tgt" ]] || die "$src is a tree and you are not inside a worktree; pass a target branch"
+  fi
+  [[ "$src" != "$tgt" ]] || die "source and target are the same branch"
+  if is_protected "$src"; then die "'$src' is protected (the grove's main branch, or listed in protect); it cannot be finished"; fi
+  local sp; sp="$(wt_path_for "$src")"
+  if inside "$cwd" "$sp"; then die "you are standing inside $sp. Run finish from the target's worktree (or anywhere else)."; fi
+  local -a kids; mapfile -t kids < <(children_of "$src")
+  (( ${#kids[@]} == 0 )) || die "$src still has root(s): $(join ' ' "${kids[@]}"). Finish or rm them first."
+  if [[ -n "$sp" ]] && is_dirty "$sp"; then (( FORCE )) || die "$src has uncommitted changes in $sp. Commit them, or use --force to discard them."; fi
+  if (( ! APPLY )); then
+    local tp; tp="$(wt_path_for "$tgt")"
+    note "Would merge $src into $tgt, then remove $src (worktree ${sp:-(none)}, branch, groveParent)."
+    if [[ -n "$tp" ]] && ! g merge-base --is-ancestor "$src" "$tgt"; then run git --no-pager -C "$tp" diff --stat "$tgt...$src"; fi
+    note "Nothing changed. Re-run with --apply to do it."
+    return 0
+  fi
+  do_merge "$src" "$tgt" || return 1
+  finish_tidy "$src"
+}
+
+# ---------- destroy ----------
+cmd_destroy() {
+  local dir="${ARGS[1]:-}"; [[ -n "$dir" ]] || usage_die destroy
+  [[ -d "$dir/.bare" ]] || die "'$dir' is not a grove (no .bare inside it)"
+  dir="$(abs_path "$dir")"
+  local here; here="$(abs_path .)"
+  if inside "$here" "$dir"; then die "you are standing inside $dir. cd out of it first."; fi
+  local -a dirty=() outside=()
+  local p b
+  while IFS=$'\t' read -r p b; do
+    [[ -d "$p" ]] || continue
+    if is_dirty "$p"; then dirty+=("$b"); fi
+    if ! inside "$p" "$dir"; then outside+=("$p"); fi
+  done < <(git -C "$dir" worktree list --porcelain | awk '/^worktree /{p=substr($0,10)} /^branch /{b=substr($0,8); sub("^refs/heads/","",b); print p "\t" b}')
+  if (( ${#dirty[@]} )) && (( ! FORCE )); then die "uncommitted changes in: $(join ' ' "${dirty[@]}"). Use --force to destroy anyway."; fi
+  note "This permanently deletes $dir: the git database, every worktree, and every branch that was never pushed."
+  if (( ! YES )); then
+    [[ -t 0 ]] || die "no terminal to confirm on; pass -y/--yes"
+    local a; read -r -p "Type the folder name ($(basename "$dir")) to confirm: " a
+    if [[ "$a" != "$(basename "$dir")" ]]; then note "Cancelled."; return 1; fi
+  fi
+  for p in "${outside[@]}"; do run git -C "$dir" worktree remove --force "$p"; done   # worktrees that live outside the grove folder
+  say "rm -rf $dir"
+  if (( DRY_RUN )); then note "(dry run: nothing deleted)"; return 0; fi
+  rm -rf "$dir"
+  note "Destroyed $dir."
 }
 
 # ---------- navigation: these print a path on stdout; the shell wrapper does the cd ----------
@@ -441,13 +601,17 @@ usage: git grove <verb> [options]
   add <branch> [base] [--from <parent>]      plant a tree, or with --from grow a root under <parent>
   list [--json]                              every branch, roots drawn under their parents
   rm <branch|path> [-r] [-f] [--apply]       preview a removal; --apply does it
+  merge <target|parent|siblings|all>         show the diff, confirm, git merge; --abort / --continue
+  finish <source> [target] [--apply]         merge <source> in, then remove it (worktree, folder, branch)
+  destroy <grove-dir> [-f]                   delete a whole grove, after typing its name
   go <branch> | up | down <name>             print a worktree path (the `grove` shell function cds)
   path [branch]                              the grove's top folder, or a branch's folder
   sync [--pull [--rebase]]                   fetch --all --prune, optionally fast-forward each worktree
   help [verb]                                the cheat sheet, or one verb's usage
 
-options: -n/--dry-run  -v/--verbose  -q/--quiet  -r/--recursive  -f/--force  --apply
-         --print-path  --no-track  --from <parent>  --json  --pull  --ff-only  --rebase  -V/--version
+options: -n/--dry-run  -v/--verbose  -q/--quiet  -y/--yes  -r/--recursive  -f/--force  --apply
+         --print-path  --no-track  --from <parent>  --json  --pull  --ff-only  --rebase
+         --abort  --continue  -V/--version
 USAGE
 }
 usage_for() {
@@ -513,6 +677,42 @@ fast-forwarded (default) or rebased. Dirty, upstream-less and diverged worktrees
 and reported; a rebase that hits conflicts is left for you to finish.
 U
     ;;
+    merge) cat <<'U'
+usage: git grove merge <target | parent | siblings | all> [-y|--yes]
+       git grove merge --abort | --continue
+
+Run from inside the worktree whose branch you want merged (the source):
+  <target>    git merge <this branch> inside <target>'s worktree
+  parent      (in a root) target = the root's parent
+  siblings    (in a root) every sibling root is merged INTO this one, one at a time
+  all         every root of this branch is merged INTO it, one at a time
+
+Refuses if the target worktree has uncommitted changes or is already mid-merge. Shows
+`git diff --stat` and the full diff, then asks (or -y). On conflicts the markers stay; resolve,
+`git add`, and from the target's worktree run --continue (or --abort). Merges nothing else after
+a conflict. Nothing is removed; see finish.
+U
+    ;;
+    finish) cat <<'U'
+usage: git grove finish <source> [target] [-y|--yes] [-f|--force] [--apply]
+       git grove finish [<source>] --continue | --abort
+
+Merge <source> into [target], then remove <source>: worktree, folder, branch, groveParent.
+[target] defaults to the source's parent (a root), else the branch you are standing in.
+Preview by default; --apply does it. Refuses: a protected source, standing inside the source,
+a source that still has roots, or uncommitted changes in the source (-f discards them).
+After resolving a conflict, run --continue from the target's worktree; the source is found
+from MERGE_HEAD, or pass it explicitly.
+U
+    ;;
+    destroy) cat <<'U'
+usage: git grove destroy <grove-dir> [-f|--force] [-y|--yes]
+
+Permanently deletes a whole grove: .bare, every worktree, every unpushed branch.
+Lists worktrees with uncommitted changes and refuses unless -f. Asks you to type the folder
+name (-y skips that, for scripts). Refuses when run from inside the grove.
+U
+    ;;
     help) usage ;;
     *) usage; return 1 ;;
   esac
@@ -549,6 +749,9 @@ parse_args() {
       --pull)          PULL=1 ;;
       --rebase)        PULL_MODE=rebase ;;
       --ff-only)       PULL_MODE=ff-only ;;
+      -y|--yes)        YES=1 ;;
+      --abort)         MERGE_ABORT=1 ;;
+      --continue)      MERGE_CONTINUE=1 ;;
       --from)          [[ $# -gt 0 ]] || die "--from needs a parent branch" 2; FROM="$1"; shift ;;
       --from=*)        FROM="${a#--from=}" ;;
       -[!-]?*)         for (( i=${#a}-1; i>=1; i-- )); do set -- "-${a:i:1}" "$@"; done ;;   # -rf -> -r -f
@@ -568,7 +771,8 @@ main() {
   case "$verb" in
     help)  cmd_help "${ARGS[1]:-}" ;;
     init)  cmd_init ;;
-    add|list|rm|go|up|down|path|sync)
+    destroy) cmd_destroy ;;
+    add|list|rm|merge|finish|go|up|down|path|sync)
            GROVE="$(grove_root)"; "cmd_$verb" ;;
     *)     usage >&2; die "unknown verb '$verb'" 2 ;;
   esac

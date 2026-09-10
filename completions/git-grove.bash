@@ -4,8 +4,8 @@
 # git's own completion looks for a function named _git_<subcommand> when completing
 # `git <subcommand> ...`, so defining _git_grove is all it takes to complete `git grove <TAB>`.
 
-_git_grove_verbs="init add list rm go up down path sync help"
-_git_grove_opts="--dry-run --verbose --quiet --help --version --recursive --force --apply --print-path --no-track --from --json --pull --ff-only --rebase"
+_git_grove_verbs="init add list rm merge finish destroy go up down path sync help"
+_git_grove_opts="--dry-run --verbose --quiet --help --version --recursive --force --apply --print-path --no-track --from --json --pull --ff-only --rebase --yes --abort --continue"
 
 _git_grove_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
 
@@ -21,7 +21,7 @@ _git_grove_complete() {
     COMPREPLY=( $(compgen -W "$_git_grove_opts" -- "$cur") ); return
   fi
   case "$prev" in
-    --from|go|rm|path|help)
+    --from|go|rm|path|help|merge|finish)
       [[ "$prev" == help ]] && { COMPREPLY=( $(compgen -W "$_git_grove_verbs" -- "$cur") ); return; }
       COMPREPLY=( $(compgen -W "$(_git_grove_branches)" -- "$cur") ); return ;;
   esac

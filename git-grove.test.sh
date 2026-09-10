@@ -205,6 +205,99 @@ check "$(git -C "$T/src" rev-parse feature/remote-only)" "$(git -C "$T/g1" rev-p
 grep -q 'skip main: diverged' "$T/err" && pass "diverged worktree skipped under --ff-only" || fail "diverged skip: $(grep skip "$T/err")"
 grep -q 'skip feature/pp: no upstream' "$T/err" && pass "no-upstream worktree skipped" || fail "skip message: $(grep skip "$T/err")"
 
+step "merge: diff, confirm, dirty target, parent / all / siblings"
+expect_ok "init g3" gin "$T" init g3
+expect_ok "tree a" gin "$T/g3/main" add feature/a
+commit_in "$T/g3/feature-a" a1
+expect_ok "root r1" gin "$T/g3/feature-a" add r1 --from .
+expect_ok "root r2" gin "$T/g3/feature-a" add r2 --from .
+commit_in "$T/g3/roots/feature-a/r1" r1c
+commit_in "$T/g3/roots/feature-a/r2" r2c
+expect_fail "merge asks for -y without a terminal" "pass -y" gin "$T/g3/roots/feature-a/r1" merge parent </dev/null
+git -C "$T/g3" merge-base --is-ancestor feature/a-r1 feature/a && fail "merged without confirmation" || pass "nothing merged without confirmation"
+expect_ok "merge parent -y" gin "$T/g3/roots/feature-a/r1" merge parent -y
+grep -q 'diff --stat feature/a...feature/a-r1' "$T/err" && pass "diff shown before merging" || fail "diff echo: $(grep diff "$T/err")"
+git -C "$T/g3" merge-base --is-ancestor feature/a-r1 feature/a && pass "r1 merged into parent" || fail "r1 not merged"
+expect_ok "merge parent again" gin "$T/g3/roots/feature-a/r1" merge parent -y
+grep -q 'already contains' "$T/err" && pass "up-to-date merge is a no-op" || fail "no-op message"
+echo dirty >"$T/g3/feature-a/dirty.txt"
+expect_fail "dirty target refused" "uncommitted changes" gin "$T/g3/roots/feature-a/r2" merge parent -y
+rm "$T/g3/feature-a/dirty.txt"
+expect_ok "merge all (from the parent)" gin "$T/g3/feature-a" merge all -y
+git -C "$T/g3" merge-base --is-ancestor feature/a-r2 feature/a && pass "r2 merged by 'all'" || fail "r2 not merged"
+expect_ok "merge siblings (from r1)" gin "$T/g3/roots/feature-a/r1" merge siblings -y
+git -C "$T/g3" merge-base --is-ancestor feature/a-r2 feature/a-r1 && pass "r2 merged into r1 by 'siblings'" || fail "siblings"
+expect_fail "merge unknown target" "no branch" gin "$T/g3/roots/feature-a/r1" merge feature/zzz -y
+expect_fail "merge from the grove root" "inside a worktree" gin "$T/g3" merge feature/a -y
+expect_fail "merge parent from a tree" "has no parent" gin "$T/g3/feature-a" merge parent -y
+expect_fail "merge into a branch without a worktree" "has no worktree" bash -c "git -C '$T/g3' branch nowt main && cd '$T/g3/feature-a' && bash '$G' merge nowt -y"
+
+step "merge: conflicts, MERGING badge, --abort, --continue"
+expect_ok "tree b" gin "$T/g3/main" add feature/b
+(cd "$T/g3/feature-b" && echo one >c.txt && git add c.txt && git commit -qm b1)
+expect_ok "tree c" gin "$T/g3/main" add feature/c
+(cd "$T/g3/feature-c" && echo two >c.txt && git add c.txt && git commit -qm c1)
+expect_fail "conflict reported" "conflicts merging" gin "$T/g3/feature-c" merge feature/b -y
+git -C "$T/g3/feature-b" rev-parse -q --verify MERGE_HEAD >/dev/null && pass "MERGE_HEAD left in the target" || fail "no MERGE_HEAD"
+grep -q 'c.txt' "$T/err" && pass "conflicted file named" || fail "conflicted file list"
+expect_ok "list during merge" gin "$T/g3" list
+grep -qE '^feature/b .*MERGING' "$T/out" && pass "MERGING badge" || fail "badge: $(grep '^feature/b' "$T/out")"
+expect_fail "second merge refused mid-merge" "already in the middle" gin "$T/g3/feature-c" merge feature/b -y
+expect_fail "abort from the wrong worktree" "no merge in progress" gin "$T/g3/feature-c" merge --abort
+expect_ok "abort" gin "$T/g3/feature-b" merge --abort
+git -C "$T/g3/feature-b" rev-parse -q --verify MERGE_HEAD >/dev/null && fail "MERGE_HEAD after abort" || pass "abort cleared the merge"
+check "one" "$(cat "$T/g3/feature-b/c.txt")" "abort restored the file"
+expect_fail "conflict again" "conflicts" gin "$T/g3/feature-c" merge feature/b -y
+(cd "$T/g3/feature-b" && echo resolved >c.txt && git add c.txt)
+expect_ok "continue" gin "$T/g3/feature-b" merge --continue
+git -C "$T/g3/feature-b" rev-parse -q --verify MERGE_HEAD >/dev/null && fail "MERGE_HEAD after continue" || pass "continue completed the merge"
+check "2" "$(git -C "$T/g3/feature-b" log -1 --format=%P | wc -w | tr -d ' ')" "merge commit has two parents"
+expect_fail "continue with nothing in progress" "no merge in progress" gin "$T/g3/feature-b" merge --continue
+
+step "finish"
+expect_ok "root fin" gin "$T/g3/feature-a" add fin --from .
+commit_in "$T/g3/roots/feature-a/fin" f1
+FIN_SHA="$(git -C "$T/g3" rev-parse feature/a-fin)"
+expect_fail "finish from inside the source" "standing inside" gin "$T/g3/roots/feature-a/fin" finish feature/a-fin -y --apply
+expect_ok "finish preview" gin "$T/g3/feature-a" finish feature/a-fin
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-fin && pass "preview changed nothing" || fail "preview removed the branch"
+grep -q 'diff --stat' "$T/err" && pass "preview shows the diff stat" || fail "preview diff"
+expect_ok "finish --apply -y (target defaults to parent)" gin "$T/g3/feature-a" finish feature/a-fin -y --apply
+git -C "$T/g3" merge-base --is-ancestor "$FIN_SHA" feature/a && pass "fin merged into parent" || fail "fin not merged"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-fin && fail "branch left" || pass "source branch deleted"
+[[ ! -d "$T/g3/roots/feature-a/fin" ]] && pass "source folder removed" || fail "folder left"
+git -C "$T/g3" config --get branch.feature/a-fin.groveParent >/dev/null 2>&1 && fail "groveParent left" || pass "groveParent gone"
+expect_fail "finish a protected branch" "protected" gin "$T/g3/feature-a" finish main -y --apply
+expect_ok "root p" gin "$T/g3/feature-a" add p --from .
+expect_ok "root q under p" gin "$T/g3/roots/feature-a/p" add q --from .
+expect_fail "finish a source that still has roots" "still has root" gin "$T/g3/feature-a" finish feature/a-p -y --apply
+echo dirty >"$T/g3/roots/feature-a-p/q/d.txt"
+expect_fail "finish a dirty source" "uncommitted changes" gin "$T/g3/feature-a" finish feature/a-p-q -y --apply
+expect_ok "finish a dirty source with -f" gin "$T/g3/feature-a" finish feature/a-p-q -y -f --apply
+[[ ! -d "$T/g3/roots/feature-a-p" ]] && pass "bucket of the finished root removed" || fail "bucket left"
+expect_ok "root cf (will conflict)" gin "$T/g3/feature-a" add cf --from .
+(cd "$T/g3/roots/feature-a/cf" && echo x >c2.txt && git add c2.txt && git commit -qm cfx)
+(cd "$T/g3/feature-a" && echo y >c2.txt && git add c2.txt && git commit -qm ay)
+expect_fail "finish hits a conflict" "conflicts merging" gin "$T/g3/feature-a" finish feature/a-cf -y --apply
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-cf && pass "source kept while conflicted" || fail "source removed despite conflict"
+(cd "$T/g3/feature-a" && echo z >c2.txt && git add c2.txt)
+expect_ok "finish --continue finds the source from MERGE_HEAD" gin "$T/g3/feature-a" finish --continue
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-cf && fail "source left after --continue" || pass "source removed after --continue"
+[[ ! -d "$T/g3/roots/feature-a/cf" ]] && pass "source folder removed after --continue" || fail "folder left"
+expect_ok "finish a tree into the branch you stand in" gin "$T/g3/main" finish feature/b -y --apply
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/b && fail "feature/b left" || pass "tree finished into main"
+git -C "$T/g3" merge-base --is-ancestor "$(git -C "$T/g3" rev-parse main)" main && pass "main advanced" || fail "main"
+
+step "destroy"
+expect_fail "destroy from inside" "standing inside" gin "$T/g3" destroy "$T/g3" -y
+echo dirty >"$T/g3/feature-a/dd.txt"
+expect_fail "destroy refuses dirty worktrees" "uncommitted changes" gin "$T" destroy g3 -y
+expect_fail "destroy needs a terminal to type the name" "no terminal" gin "$T" destroy g3 -f </dev/null
+[[ -d "$T/g3" ]] && pass "still there after refusals" || fail "deleted despite refusal"
+expect_ok "destroy -f -y" gin "$T" destroy g3 -f -y
+[[ ! -d "$T/g3" ]] && pass "grove folder deleted" || fail "grove folder left"
+expect_fail "destroy a non-grove" "not a grove" gin "$T" destroy src -y
+
 step "help / version / usage errors"
 expect_ok "help" bash "$G" help
 grep -q 'cheat sheet' "$T/out" && pass "help prints the cheat sheet" || fail "help output"
