@@ -359,6 +359,15 @@ expect_ok "destroy -f -y" gin "$T" destroy g3 -f -y
 [[ ! -d "$T/g3" ]] && pass "grove folder deleted" || fail "grove folder left"
 expect_fail "destroy a non-grove" "not a grove" gin "$T" destroy src -y
 
+step "destroy with outside worktrees"
+expect_ok "init g4" gin "$T" init g4
+git -C "$T/g4" branch outsider main
+git -C "$T/g4" worktree add "$T/g4-outside" outsider
+[[ -d "$T/g4-outside" ]] && pass "outside worktree exists" || fail "outside worktree missing"
+expect_ok "destroy g4 with outside worktree" gin "$T" destroy g4 -f -y
+[[ ! -d "$T/g4" ]] && pass "grove folder deleted" || fail "grove folder left"
+[[ ! -d "$T/g4-outside" ]] && pass "outside worktree removed" || fail "outside worktree left: $(ls "$T/g4-outside" 2>/dev/null)"
+
 step "color / paint"
 c1="$(gin "$T/g1/main" color feature/ok)"
 [[ "$c1" =~ ^#[0-9a-f]{6}$ ]] && pass "color is #rrggbb ($c1)" || fail "color format: $c1"

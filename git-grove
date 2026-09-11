@@ -12,7 +12,7 @@
 # "git grove help" prints the cheat sheet. Bash 4+ and git are the only dependencies.
 set -euo pipefail
 
-VERSION=0.2.0
+VERSION=0.2.1
 ROOTS_DIR=roots
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -684,7 +684,9 @@ cmd_sync() {
       if [[ "$PULL_MODE" == rebase ]]; then
         run git -C "$p" rebase "$up" || warn "$b: rebase stopped on conflicts. Resolve in $p, then git rebase --continue"
       else
-        run git -C "$p" merge --ff-only "$up" || note "skip $b: diverged from $up (use --rebase)"
+        if ! run git -C "$p" merge --ff-only "$up"; then
+          warn "skip $b: diverged from $up; merge --ff-only failed. Use --rebase or resolve manually."
+        fi
       fi
     done < <(worktrees)
   fi

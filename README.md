@@ -133,6 +133,9 @@ parsed, never sourced.
 
 - Tests: `bash git-grove.test.sh`. It builds throwaway groves under a temp directory with an
   isolated git config and exercises every verb. It is the only CI.
+- **Linux / macOS coverage:** All development so far has been on Windows Git Bash. If you run the
+  suite on Linux or macOS, please open an issue with the result — success or failure — so we can
+  update the support matrix.
 - The installed copy in `~/.local/bin` is a copy, not a link: re-run `./install.sh` after editing.
 - This repo is itself a grove. `main/` holds the released script; work happens in trees.
 
@@ -161,6 +164,19 @@ git grove destroy ../old-grove           # delete a whole grove; type its name t
 `merge` never removes anything; `finish` is merge plus the tidy-up. Both refuse a target with
 uncommitted changes and stop at the first conflict, leaving git's normal conflict state for you to
 resolve. Pass `-y` to skip the confirmation (scripts, Claude).
+
+### Gotcha: `finish .` on a dirty root
+
+`grove finish . --apply` merges the root you stand in, then the shell wrapper `cd`s to the parent
+and runs `git grove rm <source> --apply`. If the source worktree has uncommitted changes, that
+follow-up `rm` will refuse to delete it. Commit or discard the changes, then re-run:
+
+```bash
+cd roots/feature-x/auth
+grove finish . -f --apply        # -f discards uncommitted changes in the source
+# OR: commit first, then:
+grove finish . --apply
+```
 
 ## One color per tree
 
