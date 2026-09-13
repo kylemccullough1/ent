@@ -62,38 +62,63 @@ expect_ok "init develop-default" gin "$T" init "$T/srcdev" gdev
 check "develop" "$(git -C "$T/gdev" symbolic-ref --short HEAD)" "bare HEAD re-pointed at develop"
 expect_fail "rm develop refused" "protected" gin "$T/gdev" rm develop --apply
 
-step "add: new / remote / local / --no-track"
-expect_ok "add new" gin "$T/g1/main" add feature/new
+step "tree: new / remote / local / --no-track / where it is cut from"
+expect_ok "tree new" gin "$T/g1/main" tree feature/new
 [[ -d "$T/g1/feature-new" ]] && pass "folder feature-new/" || fail "folder feature-new/"
 check "feature/new" "$(git -C "$T/g1/feature-new" branch --show-current)" "branch checked out"
 git -C "$T/g1/feature-new" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 && fail "new branch has upstream" || pass "new branch has no upstream"
-expect_ok "add remote-tracking" gin "$T/g1/main" add feature/remote-only
+expect_ok "tree --from a remote-only branch" gin "$T/g1/main" tree feature/from-remote --from feature/remote-only
+check "$(git -C "$T/g1" rev-parse origin/feature/remote-only)" "$(git -C "$T/g1" rev-parse feature/from-remote)" "cut from origin/<branch>"
+git -C "$T/g1/feature-from-remote" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 && fail "--no-track: upstream leaked from base" || pass "--no-track: no upstream from remote base"
+expect_ok "tree remote-tracking" gin "$T/g1/main" tree feature/remote-only
 check "origin/feature/remote-only" "$(git -C "$T/g1/feature-remote-only" rev-parse --abbrev-ref '@{u}')" "tracks origin"
 git -C "$T/g1" branch feature/local main
-expect_ok "add existing local" gin "$T/g1/main" add feature/local
+expect_ok "tree existing local" gin "$T/g1/main" tree feature/local --from feature/remote-only
 check "feature/local" "$(git -C "$T/g1/feature-local" branch --show-current)" "attached local branch"
-expect_ok "add from remote-tracking base" gin "$T/g1/main" add feature/z origin/main
-git -C "$T/g1/feature-z" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1 && fail "--no-track: upstream leaked from base" || pass "--no-track: no upstream from remote base"
+grep -q -- '--from is not used' "$T/err" && pass "says --from is ignored for an existing branch" || fail "--from ignored note: $(cat "$T/err")"
+expect_ok "tree --from main" gin "$T/g1/feature-new" tree feature/z --from main
+check "$(git -C "$T/g1" rev-parse main)" "$(git -C "$T/g1" rev-parse feature/z)" "--from main from inside another tree"
 commit_in "$T/g1/feature-new" n1
-expect_ok "add from inside a tree" gin "$T/g1/feature-new" add feature/child
-check "$(git -C "$T/g1" rev-parse feature/new)" "$(git -C "$T/g1" rev-parse feature/child)" "base = the branch you stand in"
-expect_fail "reserved name roots" "reserved" gin "$T/g1/main" add roots
-expect_fail "dash/slash folder collision" "already exists" gin "$T/g1/main" add feature-new
-expect_fail "already has a worktree" "already has a worktree" gin "$T/g1/main" add feature/new
-gin "$T/g1/main" add feature/new-dup >/dev/null 2>&1; :
+expect_ok "tree at the grove top" gin "$T/g1" tree feature/top
+check "$(git -C "$T/g1" rev-parse main)" "$(git -C "$T/g1" rev-parse feature/top)" "grove top: cut from main"
+expect_ok "tree from inside a tree" gin "$T/g1/feature-new" tree feature/child
+check "$(git -C "$T/g1" rev-parse feature/new)" "$(git -C "$T/g1" rev-parse feature/child)" "inside a tree: cut from that tree"
+check "" "$(git -C "$T/g1" config --get branch.feature/child.groveParent)" "a tree cut from a tree records no parent"
+expect_fail "tree takes no [base]" "usage: git grove tree" gin "$T/g1/main" tree feature/q main
+expect_fail "tree --from unknown" "does not exist" gin "$T/g1/main" tree feature/q --from feature/nope
+expect_fail "tree --from . at the grove top" "only works inside a worktree" gin "$T/g1" tree feature/q --from .
+expect_fail "reserved name roots" "reserved" gin "$T/g1/main" tree roots
+expect_fail "dash/slash folder collision" "already exists" gin "$T/g1/main" tree feature-new
+expect_fail "already has a worktree" "already has a worktree" gin "$T/g1/main" tree feature/new
+expect_fail "add is no longer a verb" "unknown verb 'add'" gin "$T/g1/main" add feature/q
+gin "$T/g1/main" tree feature/new-dup >/dev/null 2>&1; :
 
-step "roots: --from, --from ., literal name, buckets"
-expect_ok "add root" gin "$T/g1/main" add auth --from feature/new
+step "root: where it is cut from, literal name, buckets"
+expect_fail "root at the grove top" "must be cut from a tree or a root" gin "$T/g1" root auth
+expect_ok "root inside a tree" gin "$T/g1/feature-new" root auth
 [[ -d "$T/g1/roots/feature-new/auth" ]] && pass "root folder in bucket" || fail "root folder"
 check "feature/new-auth" "$(git -C "$T/g1/roots/feature-new/auth" branch --show-current)" "root branch name"
 check "feature/new" "$(git -C "$T/g1" config branch.feature/new-auth.groveParent)" "groveParent recorded"
-expect_ok "subroot --from ." gin "$T/g1/roots/feature-new/auth" add jwt --from .
+check "$(git -C "$T/g1" rev-parse feature/new)" "$(git -C "$T/g1" rev-parse feature/new-auth)" "root cut from its tree"
+expect_ok "root inside a root" gin "$T/g1/roots/feature-new/auth" root jwt
 [[ -d "$T/g1/roots/feature-new-auth/jwt" ]] && pass "subroot in its own bucket" || fail "subroot bucket"
 check "feature/new-auth" "$(git -C "$T/g1" config branch.feature/new-auth-jwt.groveParent)" "subroot parent"
-expect_ok "root with literal branch name" gin "$T/g1/main" add feature/lit --from=feature/new
+expect_ok "root --from a tree, literal branch name" gin "$T/g1/main" root feature/lit --from=feature/new
 check "feature/lit" "$(git -C "$T/g1/roots/feature-new/feature-lit" branch --show-current)" "literal name kept"
-expect_fail "root rejects [base]" "drop the [base]" gin "$T/g1/main" add x --from feature/new main
-expect_fail "root of unknown parent" "does not exist" gin "$T/g1/main" add x --from feature/nope
+check "feature/new" "$(git -C "$T/g1" config branch.feature/lit.groveParent)" "--from a tree records it as parent"
+expect_ok "root --from a root, from the grove top" gin "$T/g1" root deep --from feature/new-auth
+check "feature/new-auth" "$(git -C "$T/g1" config branch.feature/new-auth-deep.groveParent)" "--from a root records it as parent"
+[[ -d "$T/g1/roots/feature-new-auth/deep" ]] && pass "root of a root in the root's bucket" || fail "deep bucket"
+gin "$T/g1/main" rm feature/new-auth-deep --apply >/dev/null 2>&1 || fail "cleanup deep"
+expect_fail "tree inside a root" "cannot be cut from a root" gin "$T/g1/roots/feature-new/auth" tree feature/q
+expect_fail "tree --from a root" "is a root (parent: feature/new)" gin "$T/g1/main" tree feature/q --from feature/new-auth
+expect_ok "tree --from a tree, from inside a root" gin "$T/g1/roots/feature-new/auth" tree feature/sib --from feature/new
+check "$(git -C "$T/g1" rev-parse feature/new)" "$(git -C "$T/g1" rev-parse feature/sib)" "--from wins over where you stand"
+gin "$T/g1/main" rm feature/sib -f --apply >/dev/null 2>&1 || fail "cleanup sib"
+expect_fail "tree refuses an existing root branch" "is a root of" gin "$T/g1/main" tree feature/new-auth
+expect_fail "root refuses a branch with another parent" "already a root of feature/new-auth" gin "$T/g1/main" root feature/new-auth-jwt --from feature/new
+expect_fail "root takes no [base]" "usage: git grove root" gin "$T/g1/feature-new" root x main
+expect_fail "root of unknown parent" "does not exist" gin "$T/g1/main" root x --from feature/nope
 
 step "list"
 git -C "$T/g1" branch orphan-branch main
@@ -121,7 +146,7 @@ expect_fail "go unknown" "no branch" gin "$T/g1" go nonexistent
 check "" "$(cat "$T/out")" "go failure prints nothing on stdout"
 expect_fail "up from a tree" "has no parent" gin "$T/g1/feature-new" up
 git -C "$T/g1" config branch.orphan-branch.groveParent behind
-gin "$T/g1" add kid --from orphan-branch >/dev/null 2>&1
+gin "$T/g1" root kid --from orphan-branch >/dev/null 2>&1
 expect_fail "up when parent has no worktree" "has no worktree" gin "$T/g1/roots/orphan-branch/kid" up
 
 step "shell wrapper does not cd on failure"
@@ -150,7 +175,7 @@ expect_ok "rm auth after merge into parent" gin "$T/g1/main" rm feature/new-auth
 expect_fail "rule 2 for the tree: child feature/child? no - child is a tree; so rule 4" "commit(s) not on" gin "$T/g1/main" rm feature/child --apply
 expect_ok "rule 4 passes for pushed-but-unmerged" gin "$T/g1/main" rm feature/new --apply
 [[ ! -d "$T/g1/feature-new" ]] && pass "tree folder removed" || fail "tree folder left"
-expect_ok "add dirty" gin "$T/g1/main" add feature/dirty
+expect_ok "tree dirty" gin "$T/g1/main" tree feature/dirty
 echo x >"$T/g1/feature-dirty/x.txt"
 expect_fail "rule 3: dirty" "uncommitted" gin "$T/g1/main" rm feature/dirty --apply
 expect_ok "rule 3 with -f" gin "$T/g1/main" rm -f feature/dirty --apply
@@ -166,32 +191,32 @@ expect_ok "rm -rf bundled + child unique commit discarded" gin "$T/g1/main" rm -
 step "config: .gitgrove on the default branch, git config, env, protect union"
 printf 'branchPattern = ^(contributor/)?(feature|defect)/[A-Za-z0-9._-]+$\nprotect = integration\n' >"$T/g1/main/.gitgrove"
 (cd "$T/g1/main" && git add .gitgrove && git commit -qm gitgrove)
-expect_fail "pattern: hotfix/x refused from a worktree" "branchPattern" gin "$T/g1/feature-z" add hotfix/x
-expect_fail "pattern: refused from grove root" "branchPattern" gin "$T/g1" add hotfix/x
-expect_ok "pattern: feature/ok accepted" gin "$T/g1/main" add feature/ok
-expect_ok "pattern not applied to roots" gin "$T/g1/main" add spike --from feature/ok
+expect_fail "pattern: hotfix/x refused from a worktree" "branchPattern" gin "$T/g1/feature-z" tree hotfix/x
+expect_fail "pattern: refused from grove root" "branchPattern" gin "$T/g1" tree hotfix/x
+expect_ok "pattern: feature/ok accepted" gin "$T/g1/main" tree feature/ok
+expect_ok "pattern not applied to roots" gin "$T/g1/main" root spike --from feature/ok
 git -C "$T/g1" branch integration main
 expect_fail "protect from .gitgrove" "protected" gin "$T/g1/main" rm integration --apply
 printf 'branchPattern = ^nothing$\n' >"$T/g1/feature-z/.gitgrove"
-expect_ok "uncommitted .gitgrove on a feature branch is ignored" gin "$T/g1/feature-z" add feature/still-ok
+expect_ok "uncommitted .gitgrove on a feature branch is ignored" gin "$T/g1/feature-z" tree feature/still-ok
 rm "$T/g1/feature-z/.gitgrove"
 git -C "$T/g1" config grove.branchPattern ""
-expect_ok "local git config opts out of the team pattern" gin "$T/g1/main" add hotfix/y
+expect_ok "local git config opts out of the team pattern" gin "$T/g1/main" tree hotfix/y
 git -C "$T/g1" config --unset grove.branchPattern
-expect_fail "env GROVE_BRANCHPATTERN wins" "branchPattern" env GROVE_BRANCHPATTERN='^only/' bash -c "cd '$T/g1/main' && bash '$G' add feature/nope"
+expect_fail "env GROVE_BRANCHPATTERN wins" "branchPattern" env GROVE_BRANCHPATTERN='^only/' bash -c "cd '$T/g1/main' && bash '$G' tree feature/nope"
 git -C "$T/g1" branch extra main
 expect_fail "env GROVE_PROTECT unions" "protected" env GROVE_PROTECT=extra bash -c "cd '$T/g1/main' && bash '$G' rm extra --apply"
 expect_ok "without env, extra is removable" gin "$T/g1/main" rm extra --apply
 
 step "dry-run, --print-path, auto-prune"
-expect_ok "dry-run add" gin "$T/g1/main" add feature/dry -n
+expect_ok "dry-run tree" gin "$T/g1/main" tree feature/dry -n
 git -C "$T/g1" show-ref --verify -q refs/heads/feature/dry && fail "dry-run created a branch" || pass "dry-run created nothing"
 grep -q '^\$ git -C .* worktree add --no-track -b feature/dry' "$T/err" && pass "dry-run still echoes the git line" || fail "dry-run echo: $(cat "$T/err")"
-expect_ok "print-path" gin "$T/g1/main" add feature/pp --print-path
+expect_ok "print-path" gin "$T/g1/main" tree feature/pp --print-path
 check "$G1/feature-pp" "$(cat "$T/out")" "--print-path: stdout is the path alone"
 rm -rf "$T/g1/feature-pp"
-expect_ok "add after a hand-deleted folder" gin "$T/g1/main" add feature/pp
-grep -q '^\$ git -C .* worktree prune' "$T/err" && pass "prune echoed before add" || fail "prune echo"
+expect_ok "tree after a hand-deleted folder" gin "$T/g1/main" tree feature/pp
+grep -q '^\$ git -C .* worktree prune' "$T/err" && pass "prune echoed before tree" || fail "prune echo"
 check "feature/pp" "$(git -C "$T/g1/feature-pp" branch --show-current)" "re-attached after prune"
 
 step "sync"
@@ -207,10 +232,10 @@ grep -q 'skip feature/pp: no upstream' "$T/err" && pass "no-upstream worktree sk
 
 step "merge: diff, confirm, dirty target, parent / all / siblings"
 expect_ok "init g3" gin "$T" init g3
-expect_ok "tree a" gin "$T/g3/main" add feature/a
+expect_ok "tree a" gin "$T/g3/main" tree feature/a
 commit_in "$T/g3/feature-a" a1
-expect_ok "root r1" gin "$T/g3/feature-a" add r1 --from .
-expect_ok "root r2" gin "$T/g3/feature-a" add r2 --from .
+expect_ok "root r1" gin "$T/g3/feature-a" root r1
+expect_ok "root r2" gin "$T/g3/feature-a" root r2
 commit_in "$T/g3/roots/feature-a/r1" r1c
 commit_in "$T/g3/roots/feature-a/r2" r2c
 expect_fail "merge asks for -y without a terminal" "pass -y" gin "$T/g3/roots/feature-a/r1" merge parent </dev/null
@@ -233,9 +258,9 @@ expect_fail "merge parent from a tree" "has no parent" gin "$T/g3/feature-a" mer
 expect_fail "merge into a branch without a worktree" "has no worktree" bash -c "git -C '$T/g3' branch nowt main && cd '$T/g3/feature-a' && bash '$G' merge nowt -y"
 
 step "merge: conflicts, MERGING badge, --abort, --continue"
-expect_ok "tree b" gin "$T/g3/main" add feature/b
+expect_ok "tree b" gin "$T/g3/main" tree feature/b
 (cd "$T/g3/feature-b" && echo one >c.txt && git add c.txt && git commit -qm b1)
-expect_ok "tree c" gin "$T/g3/main" add feature/c
+expect_ok "tree c" gin "$T/g3/main" tree feature/c
 (cd "$T/g3/feature-c" && echo two >c.txt && git add c.txt && git commit -qm c1)
 expect_fail "conflict reported" "conflicts merging" gin "$T/g3/feature-c" merge feature/b -y
 git -C "$T/g3/feature-b" rev-parse -q --verify MERGE_HEAD >/dev/null && pass "MERGE_HEAD left in the target" || fail "no MERGE_HEAD"
@@ -255,7 +280,7 @@ check "2" "$(git -C "$T/g3/feature-b" log -1 --format=%P | wc -w | tr -d ' ')" "
 expect_fail "continue with nothing in progress" "no merge in progress" gin "$T/g3/feature-b" merge --continue
 
 step "finish"
-expect_ok "root fin" gin "$T/g3/feature-a" add fin --from .
+expect_ok "root fin" gin "$T/g3/feature-a" root fin
 commit_in "$T/g3/roots/feature-a/fin" f1
 FIN_SHA="$(git -C "$T/g3" rev-parse feature/a-fin)"
 expect_fail "finish from inside the source" "standing inside" gin "$T/g3/roots/feature-a/fin" finish feature/a-fin -y --apply
@@ -268,14 +293,14 @@ git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-fin && fail "branch lef
 [[ ! -d "$T/g3/roots/feature-a/fin" ]] && pass "source folder removed" || fail "folder left"
 git -C "$T/g3" config --get branch.feature/a-fin.groveParent >/dev/null 2>&1 && fail "groveParent left" || pass "groveParent gone"
 expect_fail "finish a protected branch" "protected" gin "$T/g3/feature-a" finish main -y --apply
-expect_ok "root p" gin "$T/g3/feature-a" add p --from .
-expect_ok "root q under p" gin "$T/g3/roots/feature-a/p" add q --from .
+expect_ok "root p" gin "$T/g3/feature-a" root p
+expect_ok "root q under p" gin "$T/g3/roots/feature-a/p" root q
 expect_fail "finish a source that still has roots" "still has root" gin "$T/g3/feature-a" finish feature/a-p -y --apply
 echo dirty >"$T/g3/roots/feature-a-p/q/d.txt"
 expect_fail "finish a dirty source" "uncommitted changes" gin "$T/g3/feature-a" finish feature/a-p-q -y --apply
 expect_ok "finish a dirty source with -f" gin "$T/g3/feature-a" finish feature/a-p-q -y -f --apply
 [[ ! -d "$T/g3/roots/feature-a-p" ]] && pass "bucket of the finished root removed" || fail "bucket left"
-expect_ok "root cf (will conflict)" gin "$T/g3/feature-a" add cf --from .
+expect_ok "root cf (will conflict)" gin "$T/g3/feature-a" root cf
 (cd "$T/g3/roots/feature-a/cf" && echo x >c2.txt && git add c2.txt && git commit -qm cfx)
 (cd "$T/g3/feature-a" && echo y >c2.txt && git add c2.txt && git commit -qm ay)
 expect_fail "finish hits a conflict" "conflicts merging" gin "$T/g3/feature-a" finish feature/a-cf -y --apply
@@ -292,9 +317,9 @@ step "finish all"
 expect_ok "clear r1 (has a sibling-merge commit only it knows)" gin "$T/g3/feature-a" rm feature/a-r1 -f --apply
 expect_ok "clear r2" gin "$T/g3/feature-a" rm feature/a-r2 --apply
 expect_ok "clear p (left from the finish step)" gin "$T/g3/feature-a" rm feature/a-p --apply
-expect_ok "root r1" gin "$T/g3/feature-a" add r1 --from .
-expect_ok "sub-root s1 under r1" gin "$T/g3/roots/feature-a/r1" add s1 --from .
-expect_ok "root r2" gin "$T/g3/feature-a" add r2 --from .
+expect_ok "root r1" gin "$T/g3/feature-a" root r1
+expect_ok "sub-root s1 under r1" gin "$T/g3/roots/feature-a/r1" root s1
+expect_ok "root r2" gin "$T/g3/feature-a" root r2
 commit_in "$T/g3/roots/feature-a-r1/s1" s1c; commit_in "$T/g3/roots/feature-a/r1" r1c2; commit_in "$T/g3/roots/feature-a/r2" r2c2
 S1="$(git -C "$T/g3" rev-parse feature/a-r1-s1)"; R2="$(git -C "$T/g3" rev-parse feature/a-r2)"
 expect_ok "finish all preview" gin "$T/g3/feature-a" finish all
@@ -313,8 +338,8 @@ check "" "$(git -C "$T/g3" for-each-ref --format='%(refname:short)' 'refs/heads/
 [[ ! -d "$T/g3/roots" ]] && pass "roots/ folder gone" || fail "roots/ left: $(ls "$T/g3/roots")"
 expect_ok "finish all with nothing to do" gin "$T/g3/feature-a" finish all -y --apply
 grep -q 'has no roots' "$T/err" && pass "no-roots message" || fail "no-roots"
-expect_ok "root ok1" gin "$T/g3/feature-a" add ok1 --from .; commit_in "$T/g3/roots/feature-a/ok1" ok1c
-expect_ok "root zbad (sorts after ok1)" gin "$T/g3/feature-a" add zbad --from .
+expect_ok "root ok1" gin "$T/g3/feature-a" root ok1; commit_in "$T/g3/roots/feature-a/ok1" ok1c
+expect_ok "root zbad (sorts after ok1)" gin "$T/g3/feature-a" root zbad
 (cd "$T/g3/roots/feature-a/zbad" && echo b >k.txt && git add k.txt && git commit -qm bad)
 (cd "$T/g3/feature-a" && echo a >k.txt && git add k.txt && git commit -qm a)
 expect_fail "finish all stops at the first conflict" "conflicts merging" gin "$T/g3/feature-a" finish all -y --apply
@@ -324,7 +349,7 @@ expect_ok "abort the stuck merge" gin "$T/g3/feature-a" finish --abort
 expect_ok "rm the conflicting root" gin "$T/g3/feature-a" rm feature/a-zbad -f --apply
 
 step "finish . (from inside the source) and list swatch"
-expect_ok "root dot" gin "$T/g3/feature-a" add dot --from .
+expect_ok "root dot" gin "$T/g3/feature-a" root dot
 commit_in "$T/g3/roots/feature-a/dot" dotc
 DOT="$(git -C "$T/g3" rev-parse feature/a-dot)"
 expect_ok "finish . preview" gin "$T/g3/roots/feature-a/dot" finish .
@@ -336,7 +361,7 @@ grep -q 'git grove rm feature/a-dot --apply' "$T/err" && pass "tells you the rm 
 expect_ok "finish . --print-path prints the target folder" gin "$T/g3/roots/feature-a/dot" finish . -y --apply --print-path
 check "$(W "$T/g3/feature-a")" "$(cat "$T/out")" "--print-path is the target path alone"
 expect_ok "rm dot afterwards" gin "$T/g3/feature-a" rm feature/a-dot --apply
-expect_ok "root dot2" gin "$T/g3/feature-a" add dot2 --from .
+expect_ok "root dot2" gin "$T/g3/feature-a" root dot2
 commit_in "$T/g3/roots/feature-a/dot2" dot2c
 out="$(cd "$T/g3/roots/feature-a/dot2" && source "$(dirname "$G")/completions/git-grove.bash" && grove finish . -y --apply >/dev/null 2>&1; pwd -W 2>/dev/null || pwd -P)"
 check "$(W "$T/g3/feature-a")" "$out" "wrapper: finish . lands you in the parent"
@@ -406,7 +431,8 @@ step "help / version / usage errors"
 expect_ok "help" bash "$G" help
 grep -q 'cheat sheet' "$T/out" && pass "help prints the cheat sheet" || fail "help output"
 expect_ok "help rm" bash "$G" help rm; grep -q 'Preview by default' "$T/out" && pass "help <verb>" || fail "help rm"
-expect_ok "-h add" bash "$G" add -h; grep -q 'usage: git grove add' "$T/out" && pass "-h with verb" || fail "-h add"
+expect_ok "-h tree" bash "$G" tree -h; grep -q 'usage: git grove tree' "$T/out" && pass "-h with verb" || fail "-h tree"
+expect_ok "-h root" bash "$G" root -h; grep -q 'usage: git grove root' "$T/out" && pass "-h root" || fail "-h root"
 check "git-grove $(grep -m1 '^VERSION=' "$G" | cut -d= -f2)" "$(bash "$G" --version)" "--version"
 bash "$G" --bogus >/dev/null 2>&1; check 2 $? "unknown option exits 2"
 bash "$G" nope >/dev/null 2>&1; check 2 $? "unknown verb exits 2"

@@ -12,7 +12,7 @@
 # "git grove help" prints the cheat sheet. Bash 4+ and git are the only dependencies.
 set -euo pipefail
 
-VERSION=0.2.1
+VERSION=0.3.0
 ROOTS_DIR=roots
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -187,56 +187,89 @@ cmd_init() {
   emit_path "$dwt" "Grove ready at $GROVE (default branch: $def)"
 }
 
-# ---------- add ----------
-cmd_add() {
-  local name="${ARGS[1]:-}" base="${ARGS[2]:-}" branch path parent=""
-  [[ -n "$name" ]] || usage_die add
-  run g worktree prune                                     # forget worktrees whose folder was deleted by hand
+# ---------- tree / root ----------
+# A tree is a branch with no groveParent; a root has one. "Cut from X" means the new branch starts at X.
+# from_branch: the --from value, "." meaning the branch you stand in. Must exist locally or on origin.
+from_branch() {
+  local b="$FROM"
+  if [[ "$b" == . ]]; then b="$(cur_branch)"; [[ -n "$b" ]] || die "--from . only works inside a worktree that is on a branch"; fi
+  has_local "$b" || has_remote "$b" || die "branch '$b' does not exist"
+  printf '%s' "$b"
+}
+ref_for() { if has_local "$1"; then printf '%s' "$1"; else printf 'origin/%s' "$1"; fi; }   # a remote-only branch is used as origin/<b>
 
+cmd_tree() {
+  local name="${ARGS[1]:-}" from par
+  [[ -n "$name" && -z "${ARGS[2]:-}" ]] || usage_die tree
   if [[ -n "$FROM" ]]; then
-    parent="$FROM"
-    if [[ "$parent" == "." ]]; then
-      parent="$(cur_branch)"; [[ -n "$parent" ]] || die "--from . only works inside a worktree that is on a branch"
-    fi
-    has_local "$parent" || has_remote "$parent" || die "parent branch '$parent' does not exist"
-    [[ -z "$base" ]] || die "a root is always based on its parent; drop the [base] argument"
-    if [[ "$name" == */* ]]; then                          # a full branch name is taken literally
-      branch="$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$(dashed "$name")"
-    else                                                   # a bare name is prefixed: <parent>-<name>
-      branch="$parent-$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$name"
-    fi
-    if has_local "$parent"; then base="$parent"; else base="origin/$parent"; fi
+    from="$(from_branch)"
+    par="$(parent_of "$from")"
+    [[ -z "$par" ]] || die "'$from' is a root (parent: $par), not a tree. A tree can only be cut from a tree."
+  elif [[ -z "$(cur_worktree)" ]]; then
+    from="$(default_branch)"                               # at the grove's top folder: cut from main
   else
-    branch="$name"
-    local pat; pat="$(cfg branchPattern)"
-    if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
-    local d; d="$(dashed "$branch")"
-    case "$d" in "$ROOTS_DIR"|.bare|.git) die "'$branch' is a reserved folder name in a grove" ;; esac
-    path="$GROVE/$d"
+    from="$(cur_branch)"; [[ -n "$from" ]] || die "this worktree is not on a branch; pass --from <tree>"
+    par="$(parent_of "$from")"
+    [[ -z "$par" ]] || die "you are in root '$from'; a tree cannot be cut from a root. Pass --from <tree>, or run this from a tree or the grove's top folder."
   fi
 
+  local branch="$name" pat d
+  pat="$(cfg branchPattern)"
+  if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
+  d="$(dashed "$branch")"
+  case "$d" in "$ROOTS_DIR"|.bare|.git) die "'$branch' is a reserved folder name in a grove" ;; esac
+  par="$(parent_of "$branch")"
+  [[ -z "$par" ]] || die "branch '$branch' is a root of $par, not a tree. Use: git grove root"
+  plant "$branch" "$GROVE/$d" "$(ref_for "$from")"
+  emit_path "$GROVE/$d" "Created $branch at $GROVE/$d"
+}
+
+cmd_root() {
+  local name="${ARGS[1]:-}" parent branch path was
+  [[ -n "$name" && -z "${ARGS[2]:-}" ]] || usage_die root
+  if [[ -n "$FROM" ]]; then
+    parent="$(from_branch)"
+  else
+    [[ -n "$(cur_worktree)" ]] || die "a root must be cut from a tree or a root. cd into one, or pass --from <tree|root>"
+    parent="$(cur_branch)"; [[ -n "$parent" ]] || die "this worktree is not on a branch; pass --from <tree|root>"
+  fi
+  if [[ "$name" == */* ]]; then                            # a full branch name is taken literally
+    branch="$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$(dashed "$name")"
+  else                                                     # a bare name is prefixed: <parent>-<name>
+    branch="$parent-$name"; path="$GROVE/$ROOTS_DIR/$(dashed "$parent")/$name"
+  fi
+  was="$(parent_of "$branch")"
+  [[ -z "$was" || "$was" == "$parent" ]] || die "branch '$branch' is already a root of $was, not $parent"
+  plant "$branch" "$path" "$(ref_for "$parent")"
+  if [[ "$was" != "$parent" ]]; then run g config "branch.$branch.groveParent" "$parent"; fi
+  emit_path "$path" "Created $branch at $path"
+}
+
+# plant <branch> <path> <base>: attach an existing branch, track origin/<branch>, or create <branch> from <base>
+plant() {
+  local branch="$1" path="$2" base="$3"
+  run g worktree prune                                     # forget worktrees whose folder was deleted by hand
   local existing; existing="$(wt_path_for "$branch")"
   [[ -z "$existing" ]] || die "branch '$branch' already has a worktree at $existing"
   if [[ -e "$path" ]]; then die "folder already exists: $path (feature/x and feature-x share one folder; whichever came first owns it)"; fi
 
   if has_local "$branch"; then
     note "Branch $branch exists locally; attaching a worktree."
+    if [[ -n "$FROM" ]]; then note "--from is not used: $branch already exists and stays where it is."; fi
     run g worktree add "$path" "$branch"
     if (( ! NO_TRACK )) && has_remote "$branch" && [[ -z "$(upstream_of "$branch")" ]]; then
       run g branch --set-upstream-to="origin/$branch" "$branch"
     fi
   elif has_remote "$branch"; then
     note "Branch origin/$branch exists; creating a tracking worktree."
+    if [[ -n "$FROM" ]]; then note "--from is not used: origin/$branch already exists and is checked out as it is."; fi
     if (( NO_TRACK )); then run g worktree add --no-track -b "$branch" "$path" "origin/$branch"
     else run g worktree add --track -b "$branch" "$path" "origin/$branch"; fi
   else
-    if [[ -z "$base" ]]; then base="$(cur_branch)"; [[ -n "$base" ]] || base="$(default_branch)"; fi
     note "New branch $branch from $base."
     # --no-track always: branch.autoSetupMerge=true would otherwise make a remote-tracking base the upstream
     run g worktree add --no-track -b "$branch" "$path" "$base"
   fi
-  if [[ -n "$parent" ]]; then run g config "branch.$branch.groveParent" "$parent"; fi
-  emit_path "$path" "Created $branch at $path"
 }
 
 # ---------- list ----------
@@ -407,7 +440,7 @@ do_merge() {
   local src="$1" tgt="$2" tp
   [[ "$src" != "$tgt" ]] || die "cannot merge $src into itself"
   has_local "$src" || die "no branch '$src'"
-  tp="$(wt_path_for "$tgt")"; [[ -n "$tp" ]] || die "$tgt has no worktree to merge into. git grove add $tgt"
+  tp="$(wt_path_for "$tgt")"; [[ -n "$tp" ]] || die "$tgt has no worktree to merge into. git grove tree $tgt (or root)"
   if [[ -n "$(merge_head_of "$tp")" ]]; then die "$tgt is already in the middle of a merge. From $tp run: git grove $MERGE_VERB --continue (or --abort)"; fi
   if is_dirty "$tp"; then die "$tgt has uncommitted changes in $tp. Commit them before merging into it."; fi
   if g merge-base --is-ancestor "$src" "$tgt"; then note "$tgt already contains everything on $src; nothing to merge."; return 0; fi
@@ -641,13 +674,13 @@ cmd_destroy() {
 cmd_go() {
   local b="${ARGS[1]:-}"; [[ -n "$b" ]] || usage_die go
   local p; p="$(wt_path_for "$b")"
-  if [[ -z "$p" ]]; then if has_local "$b"; then die "$b has no worktree. git grove add $b"; fi; die "no branch '$b'"; fi
+  if [[ -z "$p" ]]; then if has_local "$b"; then die "$b has no worktree. git grove tree $b (or root)"; fi; die "no branch '$b'"; fi
   printf '%s\n' "$p"
 }
 cmd_up() {
   local b; b="$(cur_branch)"; [[ -n "$b" ]] || die "run 'up' from inside a worktree that is on a branch"
   local par; par="$(parent_of "$b")"; [[ -n "$par" ]] || die "$b is a tree; it has no parent"
-  local p; p="$(wt_path_for "$par")"; [[ -n "$p" ]] || die "$par has no worktree. git grove add $par"
+  local p; p="$(wt_path_for "$par")"; [[ -n "$p" ]] || die "$par has no worktree. git grove tree $par (or root)"
   printf '%s\n' "$p"
 }
 cmd_down() {
@@ -658,7 +691,7 @@ cmd_down() {
     [[ -n "$k" ]] || continue
     p="$(wt_path_for "$k")"
     if [[ "$k" == "$b-$name" || "$k" == "$name" ]] || [[ -n "$p" && "$(basename "$p")" == "$name" ]]; then
-      [[ -n "$p" ]] || die "$k has no worktree. git grove add $k --from $b"
+      [[ -n "$p" ]] || die "$k has no worktree. git grove root $k --from $b"
       printf '%s\n' "$p"; return 0
     fi
   done < <(children_of "$b")
@@ -699,7 +732,8 @@ usage() {
 usage: git grove <verb> [options]
 
   init <name | url | path-to-clone> [dir]   build a grove: new repo, or from a URL / an existing clone
-  add <branch> [base] [--from <parent>]      plant a tree, or with --from grow a root under <parent>
+  tree <branch> [--from <tree>]              plant a tree, cut from main, the tree you stand in, or --from
+  root <name> [--from <tree|root>]           grow a root under the tree or root you stand in, or --from
   list [--json]                              every branch, roots drawn under their parents
   rm <branch|path> [-r] [-f] [--apply]       preview a removal; --apply does it
   merge <target|parent|siblings|all>         show the diff, confirm, git merge; --abort / --continue
@@ -713,7 +747,7 @@ usage: git grove <verb> [options]
   help [verb]                                the cheat sheet, or one verb's usage
 
 options: -n/--dry-run  -v/--verbose  -q/--quiet  -y/--yes  -r/--recursive  -f/--force  --apply
-         --print-path  --no-track  --from <parent>  --json  --pull  --ff-only  --rebase
+         --print-path  --no-track  --from <branch>  --json  --pull  --ff-only  --rebase
          --abort  --continue  --set <#rrggbb>  -V/--version
 USAGE
 }
@@ -731,17 +765,30 @@ usage: git grove init <name | url | path-to-clone> [dir]
 Result: <dir>/.bare (git database), <dir>/.git (pointer), <dir>/<default>/ (first tree).
 U
     ;;
-    add) cat <<'U'
-usage: git grove add <branch> [base] [--from <parent>] [--no-track] [--print-path]
+    tree) cat <<'U'
+usage: git grove tree <branch> [--from <tree>] [--no-track] [--print-path]
 
-  tree:  git grove add feature/x [base]     folder <grove>/feature-x/ ("/" becomes "-")
-         base defaults to the branch you are standing in, else the grove's main branch.
-         An existing local branch is attached; an existing origin/<branch> is tracked.
-         branchPattern from .gitgrove / git config applies here.
-  root:  git grove add auth --from feature/x
-         branch feature/x-auth in <grove>/roots/feature-x/auth/, parent recorded in
-         git config branch.feature/x-auth.groveParent. A name containing "/" is used as-is.
-         --from . means the branch of the current worktree. No branchPattern check.
+A tree is a branch in its own folder at <grove>/<branch>/ ("/" becomes "-"), with no parent.
+What it is cut from depends on where you stand:
+  the grove's top folder   the grove's main branch
+  inside a tree            that tree
+  inside a root            refused: a tree cannot be cut from a root
+  --from <tree>            that tree, from anywhere. Refused if it is a root. --from . = where you stand.
+An existing local branch is attached; an existing origin/<branch> is tracked (--from is not used).
+branchPattern from .gitgrove / git config applies here.
+U
+    ;;
+    root) cat <<'U'
+usage: git grove root <name> [--from <tree|root>] [--no-track] [--print-path]
+
+A root is a worktree that records its parent in git config branch.<b>.groveParent.
+  git grove root auth      (inside feature/x)  branch feature/x-auth in <grove>/roots/feature-x/auth/
+Its parent depends on where you stand:
+  the grove's top folder   refused: a root must be cut from a tree or a root
+  inside a tree            that tree
+  inside a root            that root   (feature/x-auth + jwt = feature/x-auth-jwt)
+  --from <tree|root>       that branch, from anywhere. --from . = where you stand.
+A name containing "/" is used as the branch name as-is. No branchPattern check.
 U
     ;;
     list) cat <<'U'
@@ -906,7 +953,7 @@ main() {
     init)  cmd_init ;;
     destroy) cmd_destroy ;;
     paint) cmd_paint ;;
-    add|list|rm|merge|finish|go|up|down|path|sync|color)
+    tree|root|list|rm|merge|finish|go|up|down|path|sync|color)
            GROVE="$(grove_root)"; "cmd_$verb" ;;
     *)     usage >&2; die "unknown verb '$verb'" 2 ;;
   esac

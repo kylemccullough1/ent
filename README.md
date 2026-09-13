@@ -34,14 +34,14 @@ the `grove` function below. Anything named `git-<x>` on `PATH` runs as `git <x>`
 
 ### The `grove` shell function (recommended)
 
-A subcommand runs in its own process and cannot change your shell's directory. `add`, `init`,
-`go`, `up`, and `down` therefore print a path; this function does the `cd`, and only when the
+A subcommand runs in its own process and cannot change your shell's directory. `tree`, `root`,
+`init`, `go`, `up`, and `down` therefore print a path; this function does the `cd`, and only when the
 command succeeded — `cd "$(failed-command)"` would otherwise land you in `$HOME`.
 
 ```bash
 grove() {
   case "${1:-}" in
-    add|init|go|up|down)
+    tree|root|init|go|up|down)
       local p
       p="$(git grove "$@" --print-path)" || return $?
       cd "$p" ;;
@@ -56,7 +56,7 @@ PowerShell (`$PROFILE`), with the same success check:
 # `git grove` resolves directly from PowerShell because ~/.local/bin is on PATH; no bash.exe needed
 function grove {
   switch ($args[0]) {
-    { $_ -in 'add','init','go','up','down' } {
+    { $_ -in 'tree','root','init','go','up','down' } {
       $p = & git grove @args --print-path
       if ($LASTEXITCODE -eq 0) { Set-Location $p }
     }
@@ -79,8 +79,8 @@ git grove init my-app                    # new repo -> my-app/.bare, my-app/main
 git grove init git@host:org/repo.git     # from a remote
 git grove init ../old-clone new-grove    # from an existing clone (it is left untouched)
 
-grove add feature/x                      # plant a tree and cd into it
-grove add auth --from .                  # a root of feature/x: branch feature/x-auth
+grove tree feature/x                     # plant a tree (cut from main at the grove top) and cd into it
+grove root auth                          # from inside feature/x: a root, branch feature/x-auth
 grove up                                 # back to feature/x
 grove down auth                          # and into the root again
 git grove list                           # everything, roots under their parents
@@ -98,6 +98,14 @@ git grove sync --pull                    # fetch everything, fast-forward every 
 - **Root** — a worktree that records a parent branch (`git config branch.<b>.groveParent`). Its
   branch is `<parent>-<name>` and its folder is `roots/<parent-dashed>/<name>/`. Roots nest
   logically to any depth; on disk they stay flat.
+- **Where you stand decides what you cut from.** Pass `--from <branch>` to choose from anywhere.
+
+  | | grove top folder | inside a tree | inside a root |
+  |---|---|---|---|
+  | `tree <branch>` | cut from main | cut from that tree | refused |
+  | `tree <branch> --from X` | X must be a tree | same | same |
+  | `root <name>` | refused | root of that tree | root of that root |
+  | `root <name> --from X` | X is any tree or root | same | same |
 - **Why flat?** A checkout inside another checkout is a real subdirectory of that project:
   `dotnet build`, webpack, tsc, test discovery, Docker contexts, and IDE indexers all walk into it.
   Keeping worktrees out of each other is the one rule that makes everything else work.

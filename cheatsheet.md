@@ -30,8 +30,8 @@ personal/
 |---|---|---|
 | `git grove init <name>` | `git init --bare .bare` · `printf 'gitdir: ./.bare' > .git` · `git worktree add --orphan -b main main` · empty commit | brand-new repo |
 | `git grove init <url \| clone> [dir]` | `git remote add origin` · `git fetch origin` · `git remote set-head origin -a` · `git symbolic-ref HEAD refs/heads/<default>` · `git worktree add` | from a clone: also `git fetch <clone> '+refs/heads/*:refs/heads/*'` and its tracking config. The clone is untouched. |
-| `git grove add <branch> [base]` | `git worktree prune` then one of: `git worktree add <path> <branch>` · `git worktree add --track -b <branch> <path> origin/<branch>` · `git worktree add --no-track -b <branch> <path> <base>` | base = the branch you are standing in, else main. `branchPattern` applies. |
-| `git grove add <name> --from <parent>` | same, plus `git config branch.<parent>-<name>.groveParent <parent>` | a root. `--from .` = current branch. No `branchPattern`. |
+| `git grove tree <branch> [--from <tree>]` | `git worktree prune` then one of: `git worktree add <path> <branch>` · `git worktree add --track -b <branch> <path> origin/<branch>` · `git worktree add --no-track -b <branch> <path> <base>` | cut from: main at the grove top, the tree you stand in, or `--from`. **Refused inside a root** and for `--from <root>`. `branchPattern` applies. |
+| `git grove root <name> [--from <tree\|root>]` | same, plus `git config branch.<parent>-<name>.groveParent <parent>` | parent: the tree or root you stand in, or `--from`. **Refused at the grove top** without `--from`. `--from .` = current branch. No `branchPattern`. |
 | `git grove list [--json]` | `git worktree list --porcelain` · `git for-each-ref` · `git rev-list --left-right --count` · `git status --porcelain` | roots drawn under parents; `(none)` = branch without a worktree; `MERGING` badge |
 | `git grove rm <branch> [-r] [-f] [--apply]` | `git worktree remove` · `git config --unset branch.<b>.groveParent` · `git branch -D` | **preview unless `--apply`**. See rules below. |
 | `git grove go <branch>` / `up` / `down <name>` | | print a path; the `grove` shell function does the `cd` |
@@ -54,8 +54,8 @@ whichever HEAD you happen to be on.
 ## Everyday flow
 
 ```
-git grove add feature/thing            # plant a tree; cd into it (or use the `grove` function)
-git grove add spike --from .           # a root for a side experiment; work, commit
+git grove tree feature/thing           # plant a tree; cd into it (or use the `grove` function)
+git grove root spike                   # from inside feature-thing/: a root for a side experiment; work, commit
 git grove up                           # back to the parent
 git grove list                         # where everything is
 git grove rm feature/thing-spike       # preview; add --apply when it says what you expect
@@ -63,12 +63,14 @@ git grove rm feature/thing-spike       # preview; add --apply when it says what 
 
 ## Gotchas
 
-- **Never delete a worktree folder by hand.** Git remembers it and `add` fails. `git grove add`
+- **Never delete a worktree folder by hand.** Git remembers it and `tree` fails. `tree`, `root`,
   and `list` run `git worktree prune` first so a hand-deleted folder heals itself.
 - **`feature/x` and `feature/x/y` cannot both be branches** (git stores refs as files). Roots use
   a hyphen: `feature/x-y`.
 - **`feature/x` and `feature-x` share the folder `feature-x/`.** Whichever exists first owns it.
-- **`add` from inside a worktree forks off *that* branch**, not main. Pass a base if you mean main.
+- **Where you stand decides what you cut from.** `tree` at the grove top cuts from main, inside a
+  tree from *that* tree, and inside a root it refuses. `root` inside a tree or root grows under it,
+  and at the grove top it refuses. `--from <branch>` works from anywhere (`tree --from` needs a tree).
 - **The stash is shared across worktrees.** Prefer a WIP commit on the branch.
 - **A branch can only be checked out in one worktree at a time.** That is the feature.
 - **`.gitgrove` is read from the default branch** (`git show main:.gitgrove`), so an edit takes

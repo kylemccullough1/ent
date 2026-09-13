@@ -4,7 +4,7 @@
 # git's own completion looks for a function named _git_<subcommand> when completing
 # `git <subcommand> ...`, so defining _git_grove is all it takes to complete `git grove <TAB>`.
 
-_git_grove_verbs="init add list rm merge finish destroy go up down path sync color paint help"
+_git_grove_verbs="init tree root list rm merge finish destroy go up down path sync color paint help"
 _git_grove_opts="--dry-run --verbose --quiet --help --version --recursive --force --apply --print-path --no-track --from --json --pull --ff-only --rebase --yes --abort --continue --set"
 
 _git_grove_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
@@ -29,7 +29,6 @@ _git_grove_complete() {
     COMPREPLY=( $(compgen -W "$_git_grove_verbs" -- "$cur") ); return
   fi
   case "$verb" in
-    add)  COMPREPLY=( $(compgen -W "$(_git_grove_branches)" -- "$cur") ) ;;   # [base]
     down) COMPREPLY=( $(compgen -W "$(git grove list --json 2>/dev/null | sed -n 's/.*"branch": "\([^"]*\)".*/\1/p')" -- "$cur") ) ;;
     *)    COMPREPLY=() ;;
   esac
@@ -44,10 +43,10 @@ _git_grove() {
   _git_grove_complete 2
 }
 
-# the shell function: cd into what add/init/go/up/down print, only if the command succeeded
+# the shell function: cd into what tree/root/init/go/up/down print, only if the command succeeded
 grove() {
   case "${1:-}" in
-    add|init|go|up|down)
+    tree|root|init|go|up|down)
       local p
       p="$(git grove "$@" --print-path)" || return $?
       cd "$p" ;;
