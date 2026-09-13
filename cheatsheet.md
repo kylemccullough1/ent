@@ -107,7 +107,7 @@ Conflicts: the merge stops with markers in the files and `MERGE_HEAD` set; your 
 | `git grove color feature/x --set '#1f2a44'` | pin a color (`git config branch.feature/x.groveColor`) |
 | `git grove paint` | prints the escape codes that tint this terminal's background (and the Windows Terminal tab) for the tree you stand in, or reset them outside a grove |
 
-Sourcing `git-grove.bash` runs `paint` after every prompt. PowerShell: see the README. Off switch:
+Sourcing `git-grove.bash` runs `paint` after every prompt (bash only). Off switch:
 `git config --global grove.paint false`. Own palette: `git config grove.palette "#hex #hex ..."`.
 Works in Windows Terminal, Git Bash (mintty), and VS Code's terminal; Rider's terminal does not support it,
 and `paint` stays silent there.

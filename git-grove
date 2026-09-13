@@ -617,7 +617,7 @@ cmd_color() {
   printf '%s\n' "$(color_of "$b")"
 }
 # paint: write the escape sequences that colour this terminal for the tree you stand in (or reset it outside
-# a grove). Meant to run from the prompt: bash PROMPT_COMMAND, PowerShell prompt(). Prints nothing where it
+# a grove). Meant to run from bash's PROMPT_COMMAND. Prints nothing where it
 # would not work: NO_COLOR, `git config grove.paint false`, or JetBrains' terminal (no OSC 11 support).
 osc() { printf '\033]%s\a' "$1"; }
 cmd_paint() {
@@ -885,7 +885,6 @@ Writes the terminal escape sequences that set this terminal's background to the 
 (and, in Windows Terminal, the tab color), or reset both when you are outside a grove. Wire it
 into your prompt so it runs after every cd:
   bash        PROMPT_COMMAND='git grove paint'   (the sourced git-grove.bash does this)
-  PowerShell  function prompt { Write-Host -NoNewline (& git grove paint); "PS $PWD> " }
 Silent where it cannot work: NO_COLOR set, `git config grove.paint false`, or JetBrains' terminal.
 If your terminal does not restore its theme on reset, pin the theme's background with
 `git config --global grove.paintReset "#0c0c0c"`.

@@ -50,27 +50,8 @@ grove() {
 }
 ```
 
-PowerShell (`$PROFILE`), with the same success check:
-
-```powershell
-# `git grove` resolves directly from PowerShell because ~/.local/bin is on PATH; no bash.exe needed
-function grove {
-  switch ($args[0]) {
-    { $_ -in 'tree','root','init','go','up','down' } {
-      $p = & git grove @args --print-path
-      if ($LASTEXITCODE -eq 0) { Set-Location $p }
-    }
-    'finish' {
-      if ($args[1] -eq '.') {        # finish the branch we stand in: merge, cd to the target, then remove it
-        $src = git symbolic-ref --short -q HEAD
-        $p = & git grove @args --print-path
-        if ($LASTEXITCODE -eq 0 -and $p) { Set-Location $p; & git grove rm $src --apply }
-      } else { & git grove @args }
-    }
-    default { & git grove @args }
-  }
-}
-```
+The shell integration is bash only. From PowerShell, plain `git grove` still works because
+`~/.local/bin` is on PATH, but nothing `cd`s for you and the terminal is not tinted.
 
 ## Use
 
@@ -196,14 +177,6 @@ grove. Wire it into your prompt so it runs after every `cd`:
 ```bash
 # bash: sourcing completions/git-grove.bash already does this
 PROMPT_COMMAND="git grove paint${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-```
-
-```powershell
-# PowerShell $PROFILE
-function prompt {
-  Write-Host -NoNewline (& git grove paint)
-  "PS $($executionContext.SessionState.Path.CurrentLocation)> "
-}
 ```
 
 - Pin a tree's color: `git grove color feature/x --set '#1f2a44'`.
