@@ -1,3 +1,5 @@
 # scratch output from the test suite, if it is ever pointed at the repo
 scratch/
 *.log
+# JetBrains IDEs (Rider) write per-machine project settings here when the folder is opened
+.idea/
