@@ -12,7 +12,7 @@
 # "git grove help" prints the cheat sheet. Bash 4+ and git are the only dependencies.
 set -euo pipefail
 
-VERSION=0.3.0
+VERSION=0.3.1
 ROOTS_DIR=roots
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -410,10 +410,12 @@ remove_branch() {
   local b="$1" p; p="$(wt_path_for "$b")"
   if [[ -n "$p" ]]; then
     if (( FORCE )); then run g worktree remove --force "$p"; else run g worktree remove "$p"; fi
-    if [[ -d "$p" ]]; then say "rm -rf $p     # git unregistered it but Windows kept the folder"; rm -rf "$p"; fi
+    # under --dry-run the worktree remove above was skipped, so the folder is still there on purpose
+    if (( ! DRY_RUN )) && [[ -d "$p" ]]; then say "rm -rf $p     # git unregistered it but Windows kept the folder"; rm -rf "$p"; fi
   fi
   if [[ -n "$(parent_of "$b")" ]]; then run g config --unset "branch.$b.groveParent"; fi   # before -D: git drops the section with the branch
   run g branch -D "$b"                                    # reachability was proved by the caller; -d would re-check against the wrong HEAD
+  if (( DRY_RUN )); then note "(dry run: $b was not removed)"; return 0; fi
   if [[ -n "$p" && "$p" == "$GROVE/$ROOTS_DIR/"* ]]; then                    # empty bucket, then empty roots/
     rmdir "$(dirname "$p")" 2>/dev/null || true
     rmdir "$GROVE/$ROOTS_DIR" 2>/dev/null || true

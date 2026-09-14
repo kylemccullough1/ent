@@ -75,9 +75,9 @@ git grove rm feature/thing-spike       # preview; add --apply when it says what 
 - **A branch can only be checked out in one worktree at a time.** That is the feature.
 - **`.gitgrove` is read from the default branch** (`git show main:.gitgrove`), so an edit takes
   effect once it lands there.
-- **`finish .` on a dirty root** merges into the parent, then the wrapper `cd`s out and runs `rm`.
-  If the source still has uncommitted changes, the `rm` will refuse. Commit or discard them, or use
-  `grove finish . -f --apply` to force-remove the source.
+- **`finish .` on a dirty root** refuses before merging. Commit the changes, or use
+  `grove finish . -f --apply`: it merges, the wrapper `cd`s to the parent, and passes `-f` on to the
+  `rm` so the root and its uncommitted changes are removed.
 - **Windows:** the `.git` pointer must be one ASCII line. PowerShell's `echo >` writes UTF-16 + BOM
   and breaks it — that is why `init` uses `printf` in bash.
 

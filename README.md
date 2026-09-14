@@ -157,12 +157,13 @@ resolve. Pass `-y` to skip the confirmation (scripts, Claude).
 ### Gotcha: `finish .` on a dirty root
 
 `grove finish . --apply` merges the root you stand in, then the shell wrapper `cd`s to the parent
-and runs `git grove rm <source> --apply`. If the source worktree has uncommitted changes, that
-follow-up `rm` will refuse to delete it. Commit or discard the changes, then re-run:
+and runs `git grove rm <source> --apply`. If the source worktree has uncommitted changes, `finish`
+refuses before merging anything. Commit them, or pass `-f` to merge and then discard them: the
+wrapper passes `-f` on to the follow-up `rm`.
 
 ```bash
 cd roots/feature-x/auth
-grove finish . -f --apply        # -f discards uncommitted changes in the source
+grove finish . -f --apply        # merge, cd to the parent, remove the root and its uncommitted changes
 # OR: commit first, then:
 grove finish . --apply
 ```

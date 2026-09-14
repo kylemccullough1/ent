@@ -212,6 +212,13 @@ step "dry-run, --print-path, auto-prune"
 expect_ok "dry-run tree" gin "$T/g1/main" tree feature/dry -n
 git -C "$T/g1" show-ref --verify -q refs/heads/feature/dry && fail "dry-run created a branch" || pass "dry-run created nothing"
 grep -q '^\$ git -C .* worktree add --no-track -b feature/dry' "$T/err" && pass "dry-run still echoes the git line" || fail "dry-run echo: $(cat "$T/err")"
+expect_ok "tree dryrm" gin "$T/g1/main" tree feature/dryrm
+echo keep >"$T/g1/feature-dryrm/precious.txt"
+expect_ok "rm -n -f --apply" gin "$T/g1/main" rm feature/dryrm -n -f --apply
+[[ -f "$T/g1/feature-dryrm/precious.txt" ]] && pass "dry-run rm --apply leaves the folder and its files" || fail "dry-run rm deleted the folder"
+git -C "$T/g1" show-ref --verify -q refs/heads/feature/dryrm && pass "dry-run rm --apply keeps the branch" || fail "dry-run rm deleted the branch"
+grep -q 'dry run: feature/dryrm was not removed' "$T/err" && pass "dry-run rm says nothing was removed" || fail "dry-run rm note: $(cat "$T/err")"
+expect_ok "rm dryrm for real" gin "$T/g1/main" rm feature/dryrm -f --apply
 expect_ok "print-path" gin "$T/g1/main" tree feature/pp --print-path
 check "$G1/feature-pp" "$(cat "$T/out")" "--print-path: stdout is the path alone"
 rm -rf "$T/g1/feature-pp"
@@ -367,6 +374,14 @@ out="$(cd "$T/g3/roots/feature-a/dot2" && source "$(dirname "$G")/completions/gi
 check "$(W "$T/g3/feature-a")" "$out" "wrapper: finish . lands you in the parent"
 git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-dot2 && fail "wrapper left the source branch" || pass "wrapper removed the source"
 [[ ! -d "$T/g3/roots/feature-a/dot2" ]] && pass "wrapper removed the source folder" || fail "folder left"
+expect_ok "root dot3" gin "$T/g3/feature-a" root dot3
+commit_in "$T/g3/roots/feature-a/dot3" dot3c
+echo junk >"$T/g3/roots/feature-a/dot3/junk.txt"
+out="$(cd "$T/g3/roots/feature-a/dot3" && source "$(dirname "$G")/completions/git-grove.bash" && grove finish . -yf --apply >/dev/null 2>&1; pwd -W 2>/dev/null || pwd -P)"
+check "$(W "$T/g3/feature-a")" "$out" "wrapper: finish . -yf on a dirty root lands you in the parent"
+git -C "$T/g3" show-ref --verify -q refs/heads/feature/a-dot3 && fail "wrapper did not pass -f on: dirty source branch left" || pass "wrapper passes -f on to rm: dirty source removed"
+[[ ! -d "$T/g3/roots/feature-a/dot3" ]] && pass "wrapper removed the dirty source folder" || fail "dirty folder left"
+git -C "$T/g3/feature-a" log --oneline | grep -q dot3c && pass "dirty source's commit landed in the parent" || fail "dot3c not merged"
 expect_ok "list --json has color" gin "$T/g3" list --json
 grep -q '"branch": "feature/a", .*"color": "#[0-9a-f]\{6\}"' "$T/out" && pass "json color field" || fail "json color: $(grep '"feature/a"' "$T/out")"
 out="$(source "$G"; GROVE="$T/g3"; O_RST=x; swatch main | od -An -c | tr -d ' \n')"

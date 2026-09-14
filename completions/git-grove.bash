@@ -52,11 +52,12 @@ grove() {
       cd "$p" ;;
     finish)
       if [[ "${2:-}" == . ]]; then      # finish the branch we stand in: merge, cd to the target, then remove it
-        local src p
+        local src p a force=()
         src="$(git symbolic-ref --short -q HEAD)" || { git grove "$@"; return $?; }
+        for a in "$@"; do case "$a" in --force|-[!-]*f*) force=(--force) ;; esac; done   # -f, or bundled like -yf
         p="$(git grove "$@" --print-path)" || return $?
         [[ -n "$p" ]] || return 0        # preview, or nothing merged: stay put
-        cd "$p" && git grove rm "$src" --apply
+        cd "$p" && git grove rm "$src" --apply "${force[@]}"
       else git grove "$@"; fi ;;
     *) git grove "$@" ;;
   esac
