@@ -1,0 +1,623 @@
+#!/usr/bin/env bash
+# ent: nested container worktree layout for git.
+#   <ent>/.bare                         bare git database
+#   <ent>/.git                          one line: "gitdir: ./.bare"
+#   <ent>/.entrc                        committed team settings
+#   <ent>/main/core/                    worktree for the default branch
+#   <ent>/branches/<slug>/core/         worktree for a top-level branch
+#   <ent>/.../twigs/<name>/core/        worktree for a twig (child worktree)
+#
+# Every container holds "core/" (the actual worktree) and "twigs/" (its children).
+# Nothing is ever checked out inside another worktree.
+set -euo pipefail
+
+VERSION=0.1.0-ent
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$HERE/lib/paths.sh" ]]; then
+  source "$HERE/lib/paths.sh"
+else
+  source "${XDG_DATA_HOME:-$HOME/.local/share}/git-ent/lib/paths.sh"
+fi
+
+# ---------- global options (parsed once, accepted anywhere on the line) ----------
+DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 APPLY=0 PRINT_PATH=0 NO_TRACK=0
+PULL=0 MERGE_ABORT=0 MERGE_CONTINUE=0
+FROM="" YES=0 SET_COLOR=""
+PULL_MODE=ff-only
+ARGS=()
+ENT=""
+
+# ---------- output helpers ----------
+ESC=$'\033'
+if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+  E_DIM="$ESC[2m" E_RED="$ESC[31m" E_YEL="$ESC[33m" E_RST="$ESC[0m"
+else
+  E_DIM='' E_RED='' E_YEL='' E_RST=''
+fi
+fmt_cmd() { local out="" a; for a in "$@"; do if [[ -z "$a" || "$a" == *[[:space:]\'\"\$\`\\]* ]]; then a="'${a//\'/\'\\\'\'}'"; fi; out+="${out:+ }$a"; done; printf '%s' "$out"; }
+say()   { printf '%s$ %s%s\n' "$E_DIM" "$(fmt_cmd "$@")" "$E_RST" >&2; }
+note()  { (( QUIET )) || printf '%s\n' "$*" >&2; }
+warn()  { printf '%sgit ent: %s%s\n' "$E_YEL" "$*" "$E_RST" >&2; }
+die()   { printf '%sgit ent: %s%s\n' "$E_RED" "$1" "$E_RST" >&2; exit "${2:-1}"; }
+usage_die() { die "usage: ent $1"; }
+
+# run: a command that changes something. Echoed; skipped under --dry-run.
+run()   { say "$@"; if (( DRY_RUN )); then return 0; fi; "$@"; }
+runat() { local d="$1"; shift; say "$@"; if (( DRY_RUN )); then return 0; fi; (cd "$d" && "$@"); }
+# query: read-only command; echoed under -v.
+query() { if (( VERBOSE )); then say "$@"; fi; "$@"; }
+
+# emit_path: print the path to stdout (so shell wrappers can cd) and a note to stderr.
+emit_path() { local p="$1" msg="${2:-}"; printf '%s\n' "$p"; [[ -n "$msg" ]] && note "$msg"; return 0; }
+
+# ---------- argument parsing ----------
+parse_args() {
+  ARGS=(); FROM=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --dry-run|-n)      DRY_RUN=1 ;;
+      --verbose|-v)      VERBOSE=1 ;;
+      --quiet|-q)        QUIET=1 ;;
+      --help|-h)         HELP=1 ;;
+      --force|-f)        FORCE=1 ;;
+      --recursive|-r)    RECURSIVE=1 ;;
+      --apply)           APPLY=1 ;;
+      --print-path)      PRINT_PATH=1 ;;
+      --no-track)        NO_TRACK=1 ;;
+      --from)            FROM="${2:-}"; shift; [[ -n "$FROM" ]] || die "--from requires a value" ;;
+      --yes|-y)          YES=1 ;;
+      --abort)           MERGE_ABORT=1 ;;
+      --continue)        MERGE_CONTINUE=1 ;;
+      --pull)            PULL=1 ;;
+      --ff-only)         PULL_MODE=ff-only ;;
+      --rebase)          PULL_MODE=rebase ;;
+      --version)         echo "git-ent $VERSION"; exit 0 ;;
+      --)                shift; break ;;
+      -*)                die "unknown option: $1" ;;
+      *)                 ARGS+=("$1") ;;
+    esac
+    shift
+  done
+  while (( $# > 0 )); do ARGS+=("$1"); shift; done
+  if (( HELP )); then usage; exit 0; fi
+}
+
+usage() {
+  cat <<EOF
+git ent $VERSION
+Usage: ent <verb> [options] [args]
+
+Verbs:
+  init <source> [dir]       create a new ent from a URL, local clone, or name
+  add <branch>              create a top-level branch
+  add twig <name>           create a twig from the current branch or --from
+  rm <branch> [--apply]     preview / remove a branch and its container
+  merge <target|parent|siblings|all>
+                            merge another branch into the current one
+  sync [--pull [--rebase]]  fetch; optionally fast-forward every clean worktree
+  list                      list branches and twigs as a tree
+  path <branch>             print the core/ path of a branch
+  check [--repair]          report inconsistencies, optionally move worktrees back
+  destroy <dir>             delete a whole ent
+EOF
+}
+
+# ---------- discovery ----------
+# ensure_ent sets ENT to the ent root using the current directory.
+ensure_ent() { ENT="$(ent_root 2>/dev/null)" || die "not inside an ent (no .bare found). See: ent help init"; }
+
+# ---------- helpers ----------
+ent_abs_path() { (cd "$1" && { pwd -W 2>/dev/null || pwd -P; }); }
+ent_dashed() { printf '%s' "${1//\//-}"; }
+
+# g: git inside the bare repo
+_g() { git -C "$ENT" "$@"; }
+
+# default/main branch configured for this ent
+_default_branch() { ent_main; }
+
+# branch exists locally or on origin
+_has_local()  { _g show-ref --verify -q "refs/heads/$1"; }
+_has_remote() { _g show-ref --verify -q "refs/remotes/origin/$1"; }
+_ref_for()    { if _has_local "$1"; then printf '%s' "$1"; else printf 'origin/%s' "$1"; fi; }
+
+# ---------- config ----------
+# .entrc lives on the default branch and is read with git show. Layers:
+#   ENT_<KEY> env > ent.<key> in bare config > committed .entrc > built-in default.
+teamfile() { _g show "$(ent_main):.entrc" 2>/dev/null || true; }
+teamfile_get() {
+  teamfile | awk -v k="$1" '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*(#|$)/ { next }
+    { key=$0; sub(/=.*/, "", key); gsub(/[[:space:]]/, "", key)
+      if (key == k) { val=$0; sub(/^[^=]*=[[:space:]]*/, "", val); print val; exit } }'
+}
+cfg() {
+  local key="$1" env="ENT_${1^^}" v
+  if [[ -n "${!env+x}" ]]; then printf '%s' "${!env}"; return; fi
+  if v="$(_g config --get "ent.$key" 2>/dev/null)"; then printf '%s' "$v"; return; fi
+  teamfile_get "$key"
+}
+
+max_depth() { local v; v="$(cfg maxDepth)"; printf '%s' "${v:-2}"; }
+branch_pattern() { cfg branchPattern; }
+
+# ---------- init ----------
+cmd_init() {
+  local src="${ARGS[1]:-}" dir="${ARGS[2]:-}" kind=name
+  [[ -n "$src" ]] || usage_die init
+  if [[ -d "$src" ]] && git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+    kind=clone; src="$(ent_abs_path "$src")"
+  elif [[ "$src" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// || "$src" =~ ^[^/[:space:]]+@[^:]+: || "$src" == *.git ]]; then
+    kind=url
+  elif [[ "$src" == */* || "$src" == .* ]]; then
+    die "'\$src' is neither a URL nor an existing git repository"
+  fi
+  local base; base="$(basename "${src%/}")"; base="${base%.git}"
+  [[ -n "$dir" ]] || dir="$base"
+  if [[ -e "$dir" && -n "$(ls -A "$dir" 2>/dev/null)" ]]; then die "'$dir' exists and is not empty; pass a different [dir]"; fi
+
+  run mkdir -p "$dir"
+  if (( DRY_RUN )); then note "(dry run) would build an ent at $dir from $kind '$src'"; return 0; fi
+  dir="$(ent_abs_path "$dir")"; ENT="$dir"
+  run git init --bare "$dir/.bare"
+  say "printf 'gitdir: ./.bare\\n' > $dir/.git"
+  printf 'gitdir: ./.bare\n' > "$dir/.git"
+
+  local tmpwt="$dir/.init-tmp" def
+
+  if [[ "$kind" == name ]]; then
+    def="$(git config --get init.defaultBranch 2>/dev/null || true)"; def="${def:-main}"
+    _g symbolic-ref HEAD "refs/heads/$def"
+    run _g worktree add --orphan -b "$def" "$tmpwt"
+    run git -C "$tmpwt" commit --allow-empty -m "Initial commit"
+  else
+    local origin="$src"
+    if [[ "$kind" == clone ]]; then
+      origin="$(git -C "$src" remote get-url origin 2>/dev/null || true)"; origin="${origin:-$src}"
+    fi
+    run _g remote add origin "$origin"
+    run _g fetch origin || warn "fetch from $origin failed; continuing with what is local"
+    run _g remote set-head origin -a || true
+    if [[ "$kind" == clone ]]; then
+      run _g fetch "$src" '+refs/heads/*:refs/heads/*'
+      local key val
+      while read -r key val; do
+        if [[ -n "$key" ]]; then run _g config "$key" "$val"; fi
+      done < <(git -C "$src" config --get-regexp '^branch\..*\.(remote|merge)$' 2>/dev/null || true)
+    fi
+    def="$(_g symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+    if [[ -z "$def" ]]; then
+      local c; for c in main master; do if _has_local "$c" || _has_remote "$c"; then def="$c"; break; fi; done
+    fi
+    [[ -n "$def" ]] || die "could not determine the default branch: no origin/HEAD, main, or master"
+    _g symbolic-ref HEAD "refs/heads/$def"
+    if _has_local "$def"; then
+      run _g worktree add "$tmpwt" "$def"
+      if _has_remote "$def" && [[ -z "$(_g config --get branch.$def.merge 2>/dev/null || true)" ]]; then
+        run _g branch --set-upstream-to="origin/$def" "$def"
+      fi
+    else
+      run _g worktree add --track -b "$def" "$tmpwt" "origin/$def"
+    fi
+  fi
+
+  # Arrange the container layout: <dir>/main/core
+  local container="$dir/main" core_dir="$dir/main/core"
+  run mkdir -p "$container"
+  # Ensure the temp worktree has fetched everything before moving? Already done.
+  run _g worktree move "$tmpwt" "$core_dir"
+
+  # Record the default branch name in bare config
+  run _g config ent.main "$def"
+
+  case "$OSTYPE" in msys*|cygwin*) note "Windows: deep root paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
+  emit_path "$core_dir" "Ent ready at $dir (default branch: $def)"
+}
+
+# ---------- helpers: tree traversal ----------
+ent_children() {
+  local p="$1" key parent b
+  # git config normalizes key names to lowercase, so match .entparent.
+  git -C "$ENT" config --get-regexp '^branch\..*\.entparent$' 2>/dev/null | while IFS=' ' read -r key parent; do
+    b="${key#branch.}"; b="${b%.entparent}"
+    if [[ "$parent" == "$p" ]]; then printf '%s\n' "$b"; fi
+  done | sort || true
+}
+
+ent_descendants() {
+  local root="$1" k
+  for k in $(ent_children "$root"); do
+    printf '%s\n' "$k"
+    ent_descendants "$k"
+  done
+}
+
+# remove children recursively, then the branch itself
+ent_rm_recursive() {
+  local b="$1" child
+  for child in $(ent_children "$b"); do
+    ent_rm_recursive "$child"
+  done
+  ent_rm_one "$b"
+}
+
+branch_safe_to_delete() {
+  local b="$1" p
+  p="$(ent_parent "$b")"
+  if [[ -n "$p" ]] && git -C "$ENT" merge-base --is-ancestor "$b" "$p" 2>/dev/null; then return 0; fi
+  git -C "$ENT" branch --merged 2>/dev/null | grep -qxF "  $b" && return 0
+  return 1
+}
+
+ent_worktree_dirty() {
+  local core_dir="$1" out
+  out="$(git -C "$core_dir" status --porcelain 2>/dev/null)"
+  [[ -n "$out" ]]
+}
+
+ent_rm_one() {
+  local b="$1" core_dir container
+  core_dir="$(ent_core "$b")"
+  container="$(ent_container "$b")"
+  if ent_worktree_dirty "$core_dir"; then
+    if (( FORCE )); then warn "force-removing dirty worktree $b"
+    else die "branch '$b' has uncommitted changes; pass --force or commit them"; fi
+  fi
+  local wt_args=()
+  if (( FORCE )); then wt_args+=(--force); fi
+  run _g worktree remove "$core_dir" "${wt_args[@]}"
+  if _g branch -d "$b" >/dev/null 2>&1; then :;
+  elif branch_safe_to_delete "$b"; then run _g branch -D "$b"
+  elif (( FORCE )); then run _g branch -D "$b"
+  else die "branch '$b' is not fully merged; pass --force to delete"; fi
+  _g config --unset "branch.$b.entParent" >/dev/null 2>&1 || true
+  rmdir "$container/twigs" 2>/dev/null || true
+  rmdir "$container" 2>/dev/null || true
+}
+
+# ---------- add ----------
+cmd_add() {
+  ensure_ent
+  local branch="${ARGS[1]:-}" pat base core_dir container
+  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "add <branch>"
+  _has_local "$branch" && die "branch '$branch' already exists"
+  pat="$(branch_pattern)"
+  if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
+  local slug; slug="$(ent_dashed "$branch")"
+  case "$slug" in main|branches|twigs|core|.bare|.git) die "'$branch' resolves to a reserved name: $slug" ;; esac
+  if [[ -n "$FROM" ]]; then
+    base="$FROM"; _has_local "$base" || _has_remote "$base" || die "base branch '$base' not found"
+  else
+    base="$(_default_branch)"
+  fi
+  container="$(ent_container "$branch")"
+  if [[ -z "$(ent_parent "$branch")" ]]; then
+    [[ "$branch" != "$(_default_branch)" ]] || die "use 'add <branch>' for the default branch is not needed; it already exists"
+  fi
+  core_dir="$(ent_core "$branch")"
+  [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
+  run mkdir -p "$container/twigs"
+  run _g worktree add --no-track -b "$branch" "$core_dir" "$(if _has_local "$base"; then printf '%s' "$base"; else printf 'origin/%s' "$base"; fi)"
+  emit_path "$core_dir" "Created branch $branch at $core_dir"
+}
+
+cmd_add_twig() {
+  ensure_ent
+  local name="${ARGS[2]:-}" parent branch container core_dir slug max_d depth
+  [[ -n "$name" && -z "${ARGS[3]:-}" ]] || usage_die "add twig <name> [--from <parent>]"
+  if [[ -n "$FROM" ]]; then
+    parent="$FROM"
+  else
+    parent="$(ent_branch_of_cwd)" || die "add twig <name> requires --from <parent> or cwd inside a core worktree"
+  fi
+  _has_local "$parent" || die "parent branch '$parent' not found"
+  branch="$parent-$name"
+  _has_local "$branch" && die "branch '$branch' already exists"
+  slug="$(ent_dashed "$branch")"
+  case "$slug" in main|branches|twigs|core|.bare|.git) die "'$branch' resolves to a reserved name: $slug" ;; esac
+  max_d="$(max_depth)"
+  # depth of the new twig = parent depth + 1
+  depth="$(ent_depth "$parent")"; depth=$((depth + 1))
+  if (( depth > max_d )); then die "twig '$name' would be at depth $depth; maxDepth is $max_d"; fi
+  # Compute container from parent manually; ent_container needs entParent which
+  # we deliberately only set after the worktree is successfully created.
+  container="$(ent_container "$parent")/twigs/$name"
+  core_dir="$container/core"
+  [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
+  run mkdir -p "$container"
+  run _g worktree add --no-track -b "$branch" "$core_dir" "$parent"
+  run _g config "branch.$branch.entParent" "$parent"
+  emit_path "$core_dir" "Created twig $branch at $core_dir"
+}
+
+# ---------- rm ----------
+cmd_rm() {
+  ensure_ent
+  cd "$ENT"   # avoid being inside the worktree we are about to remove
+  local branch="${ARGS[1]:-}" main prot child targets
+  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "rm <branch> [--apply] [--recursive] [--force]"
+  main="$(ent_main)"
+  [[ "$branch" != "$main" ]] || die "cannot remove the default branch '$main'"
+  prot="$(cfg protect) $main"
+  for p in $prot; do if [[ "$branch" == "$p" ]]; then die "branch '$branch' is protected"; fi; done
+  _has_local "$branch" || die "branch '$branch' not found"
+
+  # collect descendants
+  targets="$branch $(ent_descendants "$branch")"
+  if [[ -n "$(ent_children "$branch")" ]] && (( ! RECURSIVE )); then
+    die "branch '$branch' has twigs; pass --recursive to remove them too"
+  fi
+
+  # preview / dry run
+  if ! (( APPLY )); then
+    echo "Would remove:"
+    printf '  %s\n' $targets
+    echo "Pass --apply to remove."
+    return 0
+  fi
+
+  # Safety: check dirty worktrees first (unless FORCE)
+  if ! (( FORCE )); then
+    for b in $(printf '%s\n' $targets | sort -u); do
+      if ent_worktree_dirty "$(ent_core "$b")"; then
+        die "branch '$b' has uncommitted changes; pass --force or commit them"
+      fi
+    done
+  fi
+
+  ent_rm_recursive "$branch"
+  note "Removed $branch"
+}
+
+# ---------- list / path / check ----------
+# Return marker chars for a branch: '?' = moved, '!' = dangling parent.
+ent_branch_markers() {
+  local b="$1" actual expected p markers=""
+  expected="$(ent_norm "$(ent_core "$b")")"
+  actual="${ENT_WT_PATH[$b]:-}"
+  if [[ -n "$actual" && "$actual" != "$expected" ]]; then markers+="?"; fi
+  p="$(ent_parent "$b")"
+  if [[ -n "$p" ]] && ! _has_local "$p"; then markers+="!"; fi
+  printf '%s' "$markers"
+}
+
+ent_list_branch() {
+  local b="$1" indent="$2" markers children child main
+  main="$(ent_main)"
+  markers="$(ent_branch_markers "$b")"
+  local label=""
+  [[ "$b" == "$main" ]] && label=" [main]"
+  printf '%s%s%s%s\n' "$indent" "$b" "$([ -n "$markers" ] && printf ' [%s]' "$markers")" "$label"
+  children="$(ent_children "$b")"
+  for child in $children; do
+    ent_list_branch "$child" "$indent  "
+  done
+}
+
+cmd_list() {
+  ensure_ent; cd "$ENT"
+  ent_load_worktrees
+  local b
+  ent_list_branch "$(ent_main)" ""
+  for b in $(ent_top_branches); do
+    ent_list_branch "$b" ""
+  done
+}
+
+# ent_top_branches: branches with no parent, excluding the main/default branch
+ent_top_branches() {
+  local main b
+  main="$(ent_main)"
+  for b in $(_g branch --format='%(refname:short)'); do
+    if [[ "$b" != "$main" && -z "$(ent_parent "$b")" ]]; then
+      printf '%s\n' "$b"
+    fi
+  done | sort
+}
+
+cmd_path() {
+  ensure_ent
+  local branch="${ARGS[1]:-}" win=0
+  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "path <branch> [--win]"
+  local p; p="$(ent_core "$branch")"
+  if (( PRINT_PATH )); then win=1; fi
+  if (( win )); then
+    if command -v cygpath >/dev/null 2>&1; then cygpath -w "$p"; else printf '%s\n' "$p"; fi
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+cmd_check() {
+  ensure_ent; cd "$ENT"
+  ent_load_worktrees
+  local bad=0 b actual expected
+  # 1. worktrees not at their derived path
+  for b in $(_g branch --format='%(refname:short)'); do
+    actual="${ENT_WT_PATH[$b]:-}"
+    [[ -n "$actual" ]] || continue
+    expected="$(ent_norm "$(ent_core "$b")")"
+    if [[ "$actual" != "$expected" ]]; then
+      echo "moved: $b"
+      echo "  actual:   $actual"
+      echo "  expected: $expected"
+      bad=1
+    fi
+  done
+
+  # 2. dangling parent configs
+  local key parent p
+  git -C "$ENT" config --get-regexp '^branch\..*\.entparent$' 2>/dev/null | while IFS=' ' read -r key parent; do
+    b="${key#branch.}"; b="${b%.entparent}"
+    if ! _has_local "$parent" && [[ -n "$parent" ]]; then
+      echo "dangling parent: $b -> $parent"; bad=1
+    fi
+  done || true
+
+  # --repair only moves worktrees back; it never deletes.
+  if (( APPLY )); then
+    for b in $(_g branch --format='%(refname:short)'); do
+      actual="${ENT_WT_PATH[$b]:-}"
+      [[ -n "$actual" ]] || continue
+      expected="$(ent_norm "$(ent_core "$b")")"
+      if [[ "$actual" != "$expected" && ! -e "$expected" ]]; then
+        run _g worktree move "$actual" "$expected"
+      fi
+    done
+    bad=0
+  fi
+
+  (( bad )) && return 1 || return 0
+}
+
+# ---------- merge / sync ----------
+merge_head_of() { git -C "$1" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null; }
+branch_at_commit() { _g for-each-ref --points-at "$1" --format='%(refname:short)' refs/heads; }
+
+confirm() {
+  if (( YES )); then return 0; fi
+  [[ -t 0 ]] || die "$1 -- no terminal to ask on; pass -y/--yes to confirm"
+  local a; read -r -p "$1 [y/N] " a
+  if [[ "$a" =~ ^[yY]$ ]]; then return 0; fi
+  note "Cancelled."; return 1
+}
+
+ent_worktree_exists() {
+  local b="$1"
+  ent_load_worktrees
+  [[ -n "${ENT_WT_PATH[$b]:-}" ]]
+}
+
+do_merge() {
+  local src="$1" tgt="$2" tp
+  [[ "$src" != "$tgt" ]] || die "cannot merge $src into itself"
+  _has_local "$src" || die "no branch '$src'"
+  _has_local "$tgt" || die "no branch '$tgt'"
+  tp="$(ent_core "$tgt")"
+  ent_load_worktrees
+  [[ -n "${ENT_WT_PATH[$tgt]:-}" ]] || die "$tgt has no worktree to merge into"
+  if [[ -f "$(merge_head_of "$tp")" ]]; then die "$tgt is already mid-merge. Use --abort or --continue from $tp"; fi
+  if ent_worktree_dirty "$tp"; then die "$tgt has uncommitted changes in $tp"; fi
+  if _g merge-base --is-ancestor "$src" "$tgt"; then note "$tgt already contains $src"; return 0; fi
+  note "Changes $src would bring into $tgt:"
+  run git --no-pager -C "$tp" diff --stat "$tgt...$src"
+  confirm "Merge $src into $tgt?" || return 1
+  if (( DRY_RUN )); then note "(dry run: not merged)"; return 0; fi
+  if run git -C "$tp" merge --no-edit "$src"; then note "Merged $src into $tgt."; return 0; fi
+  if [[ -f "$(merge_head_of "$tp")" ]]; then
+    warn "conflicts merging $src into $tgt"
+    git -C "$tp" diff --name-only --diff-filter=U >&2
+    note "Resolve in $tp, then: ent merge --continue (or --abort)"
+    return 1
+  fi
+  die "git merge failed in $tp"
+}
+
+merge_abort_or_continue() {
+  local cwd
+  cwd="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if (( MERGE_ABORT )); then
+    [[ -n "$cwd" ]] || die "run --abort from inside the worktree that is mid-merge"
+    [[ -f "$(merge_head_of "$cwd")" ]] || die "no merge in progress in $cwd"
+    run git -C "$cwd" merge --abort
+    return 0
+  fi
+  if (( MERGE_CONTINUE )); then
+    [[ -n "$cwd" ]] || die "run --continue from inside the worktree that is mid-merge"
+    local mh; mh="$(merge_head_of "$cwd")"
+    [[ -f "$mh" ]] || die "no merge in progress in $cwd"
+    run env GIT_EDITOR=true git -C "$cwd" merge --continue
+    return 0
+  fi
+  return 1
+}
+
+cmd_merge() {
+  ensure_ent
+  if merge_abort_or_continue; then return 0; fi
+  local what="${ARGS[1]:-}"; [[ -n "$what" ]] || usage_die "merge <target|parent|siblings|all>"
+  local src; src="$(ent_branch_of_cwd)" || die "run merge from inside a core worktree that is on a branch"
+  ent_load_worktrees   # cache worktree paths
+  local T=$'\t' par k
+  local -a pairs=()
+  case "$what" in
+    parent)
+      par="$(ent_parent "$src")"; [[ -n "$par" ]] || die "$src is a top-level branch; it has no parent"
+      pairs+=("$src$T$par") ;;
+    siblings)
+      par="$(ent_parent "$src")"; [[ -n "$par" ]] || die "$src is a top-level branch; only twigs have siblings"
+      for k in $(ent_children "$par"); do if [[ "$k" != "$src" ]]; then pairs+=("$k$T$src"); fi; done
+      (( ${#pairs[@]} > 0 )) || { note "$src has no siblings"; return 0; } ;;
+    all)
+      for k in $(ent_children "$src"); do pairs+=("$k$T$src"); done
+      (( ${#pairs[@]} > 0 )) || { note "$src has no twigs"; return 0; } ;;
+    *)
+      _has_local "$what" || die "no branch '$what'"
+      pairs+=("$src$T$what") ;;
+  esac
+  local pr
+  for pr in "${pairs[@]}"; do
+    do_merge "${pr%%$T*}" "${pr#*$T}" || return 1
+  done
+}
+
+cmd_sync() {
+  ensure_ent; cd "$ENT"
+  run _g fetch --all --prune
+  if (( PULL )); then
+    local p b up
+    ent_load_worktrees
+    for b in $(_g branch --format='%(refname:short)'); do
+      p="${ENT_WT_PATH[$b]:-}"
+      [[ -n "$p" ]] || continue
+      up="$(_g rev-parse --abbrev-ref "$b@{u}" 2>/dev/null || true)"
+      [[ -n "$up" ]] || { note "skip $b: no upstream"; continue; }
+      if ent_worktree_dirty "$p"; then note "skip $b: uncommitted changes"; continue; fi
+      if [[ "$PULL_MODE" == rebase ]]; then
+        run git -C "$p" rebase "$up" || warn "$b: rebase stopped on conflicts"
+      else
+        if ! run git -C "$p" merge --ff-only "$up"; then
+          warn "skip $b: diverged from $up"
+        fi
+      fi
+    done
+  fi
+  cmd_list
+}
+
+cmd_destroy() {
+  local dir="${ARGS[1]:-}"
+  [[ -n "$dir" && -z "${ARGS[2]:-}" ]] || usage_die "destroy <dir> [-f/--force]"
+  [[ -d "${dir}/.bare" ]] || die "'$dir' is not an ent (no .bare)"
+  if ! (( FORCE )); then
+    [[ -t 0 ]] || die "refusing to destroy without a terminal; pass --force"
+    local a; read -r -p "Type the directory name to destroy '$dir': " a
+    [[ "$a" == "$(basename "$dir")" ]] || die "destroy cancelled"
+  fi
+  run rm -rf "$dir"
+}
+
+# ---------- dispatch ----------
+main() {
+  parse_args "$@"
+  local verb="${ARGS[0]:-}"
+  [[ -n "$verb" ]] || { usage; exit 1; }
+  case "$verb" in
+    init)       cmd_init ;;
+    add)
+      if [[ "${ARGS[1]:-}" == "twig" ]]; then cmd_add_twig; else cmd_add; fi ;;
+    rm)        cmd_rm ;;
+    list)      cmd_list ;;
+    path)      cmd_path ;;
+    check)     cmd_check ;;
+    merge)     cmd_merge ;;
+    sync)      cmd_sync ;;
+    destroy)   cmd_destroy ;;
+    finish)
+      die "finish not implemented" ;;
+    *)          die "unknown verb: $verb" ;;
+  esac
+}
+
+main "$@"
