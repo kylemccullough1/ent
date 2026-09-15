@@ -62,6 +62,7 @@ parse_args() {
       --force|-f)        FORCE=1 ;;
       --recursive|-r)    RECURSIVE=1 ;;
       --apply)           APPLY=1 ;;
+      --repair)          APPLY=1 ;;
       --print-path)      PRINT_PATH=1 ;;
       --no-track)        NO_TRACK=1 ;;
       --from)            FROM="${2:-}"; shift; [[ -n "$FROM" ]] || die "--from requires a value" ;;

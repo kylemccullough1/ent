@@ -60,6 +60,7 @@ if [[ -d "$main_old" && ! -d "$main_new" ]]; then
   tmp_main="$ENT/.migrate-main"
   echo "Reorganising default branch $main -> main/core"
   g worktree move "$main_old" "$tmp_main"
+  mkdir -p "$ENT/main"
   mv "$tmp_main" "$main_new"
   g worktree repair "$main_new" >/dev/null
 fi
