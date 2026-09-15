@@ -1,113 +1,18 @@
-# git grove — cheat sheet
-
-A grove is one repo laid out as a bare database plus one folder per branch. Every mutating
-command prints the `$ git ...` it runs, so you always see the git underneath.
-
-## Words
-
-| Word  | Meaning                                       | Where on disk                              |
-|-------|-----------------------------------------------|--------------------------------------------|
-| grove | one repo in this layout                       | `<dir>/.bare` + `<dir>/.git` + folders     |
-| tree  | a branch worktree                             | `<grove>/<branch-with-slashes-dashed>/`    |
-| root  | a worktree that records a parent branch       | `<grove>/roots/<parent-dashed>/<name>/`    |
-
-A root is a tree with a parent. The parent is stored in `git config branch.<b>.groveParent`,
-local to your machine, never pushed. Nothing is ever nested inside another worktree.
+# git-ent cheat sheet
 
 ```
-personal/
-  .bare/                 git database          .git   "gitdir: ./.bare"
-  main/                  tree  main
-  feature-x/             tree  feature/x
-  roots/feature-x/auth/  root  feature/x-auth   (parent feature/x)
-  roots/feature-x/db/    root  feature/x-db     (parent feature/x)
-  roots/feature-x-auth/jwt/   root feature/x-auth-jwt  (parent feature/x-auth)
+git ent init <name | url | path-to-clone> [dir]   build an ent
+git ent add <branch>                              create a top-level branch
+git ent add twig <name> [--from <parent>]         create a nested twig
+git ent rm <branch> [-r] [-f] [--apply]           preview/remove a branch
+git ent merge <target|parent|siblings|all> [-y]   merge; --abort / --continue
+git ent sync [--pull [--rebase]]                  fetch; optionally fast-forward
+git ent list                                      tree of branches and twigs
+git ent path <branch> [--win]                     print the core/ path
+git ent check [--repair]                          report/fix moved worktrees
+git ent destroy <dir> [-f]                        delete a whole ent
+git ent help                                      this cheat sheet
 ```
 
-## Verbs and the git behind them
-
-| Command | Raw git | Notes |
-|---|---|---|
-| `git grove init <name>` | `git init --bare .bare` · `printf 'gitdir: ./.bare' > .git` · `git worktree add --orphan -b main main` · empty commit | brand-new repo |
-| `git grove init <url \| clone> [dir]` | `git remote add origin` · `git fetch origin` · `git remote set-head origin -a` · `git symbolic-ref HEAD refs/heads/<default>` · `git worktree add` | from a clone: also `git fetch <clone> '+refs/heads/*:refs/heads/*'` and its tracking config. The clone is untouched. |
-| `git grove tree <branch> [--from <tree>]` | `git worktree prune` then one of: `git worktree add <path> <branch>` · `git worktree add --track -b <branch> <path> origin/<branch>` · `git worktree add --no-track -b <branch> <path> <base>` | cut from: main at the grove top, the tree you stand in, or `--from`. **Refused inside a root** and for `--from <root>`. `branchPattern` applies. |
-| `git grove root <name> [--from <tree\|root>]` | same, plus `git config branch.<parent>-<name>.groveParent <parent>` | parent: the tree or root you stand in, or `--from`. **Refused at the grove top** without `--from`. `--from .` = current branch. No `branchPattern`. |
-| `git grove list [--json]` | `git worktree list --porcelain` · `git for-each-ref` · `git rev-list --left-right --count` · `git status --porcelain` | roots drawn under parents; `(none)` = branch without a worktree; `MERGING` badge |
-| `git grove rm <branch> [-r] [-f] [--apply]` | `git worktree remove` · `git config --unset branch.<b>.groveParent` · `git branch -D` | **preview unless `--apply`**. See rules below. |
-| `git grove go <branch>` / `up` / `down <name>` | | print a path; the `grove` shell function does the `cd` |
-| `git grove path [branch]` | | grove top folder, or a branch's folder |
-| `git grove sync [--pull [--rebase]]` | `git fetch --all --prune` · per worktree `git merge --ff-only @{u}` or `git rebase @{u}` | one fetch updates every worktree (shared object store) |
-
-Global options: `-n/--dry-run` (echo, don't run) · `-v/--verbose` (echo reads too) · `-q/--quiet`
-· `--print-path` · `-V/--version` · `-h/--help`. Short flags bundle: `rm -rf`.
-
-## `rm` refuses, in order
-
-1. main, anything in `protect`, the folder you are standing in — **no override**
-2. a branch that still has roots — `-r` removes them too, deepest first
-3. uncommitted changes — `-f` discards
-4. commits on neither main, the parent, nor the upstream — `-f` loses them
-
-`-D` is used, not `-d`: rule 4 already proved the commits are safe, and `-d` would re-check against
-whichever HEAD you happen to be on.
-
-## Everyday flow
-
-```
-git grove tree feature/thing           # plant a tree; cd into it (or use the `grove` function)
-git grove root spike                   # from inside feature-thing/: a root for a side experiment; work, commit
-git grove up                           # back to the parent
-git grove list                         # where everything is
-git grove rm feature/thing-spike       # preview; add --apply when it says what you expect
-```
-
-## Gotchas
-
-- **Never delete a worktree folder by hand.** Git remembers it and `tree` fails. `tree`, `root`,
-  and `list` run `git worktree prune` first so a hand-deleted folder heals itself.
-- **`feature/x` and `feature/x/y` cannot both be branches** (git stores refs as files). Roots use
-  a hyphen: `feature/x-y`.
-- **`feature/x` and `feature-x` share the folder `feature-x/`.** Whichever exists first owns it.
-- **Where you stand decides what you cut from.** `tree` at the grove top cuts from main, inside a
-  tree from *that* tree, and inside a root it refuses. `root` inside a tree or root grows under it,
-  and at the grove top it refuses. `--from <branch>` works from anywhere (`tree --from` needs a tree).
-- **The stash is shared across worktrees.** Prefer a WIP commit on the branch.
-- **A branch can only be checked out in one worktree at a time.** That is the feature.
-- **`.gitgrove` is read from the default branch** (`git show main:.gitgrove`), so an edit takes
-  effect once it lands there.
-- **`finish .` on a dirty root** refuses before merging. Commit the changes, or use
-  `grove finish . -f --apply`: it merges, the wrapper `cd`s to the parent, and passes `-f` on to the
-  `rm` so the root and its uncommitted changes are removed.
-- **Windows:** the `.git` pointer must be one ASCII line. PowerShell's `echo >` writes UTF-16 + BOM
-  and breaks it — that is why `init` uses `printf` in bash.
-
-## Merging and finishing (v2)
-
-| Command | Raw git | Notes |
-|---|---|---|
-| `git grove merge <target>` | in `<target>`'s folder: `git diff --stat target...source` · `git diff target...source` · `git merge --no-edit <source>` | run from the source's worktree. Refuses a dirty or mid-merge target. Asks, or `-y`. |
-| `git grove merge parent` | same | (in a root) target = the recorded parent |
-| `git grove merge siblings` | same, once per sibling | (in a root) every sibling root → this root; stops at the first conflict |
-| `git grove merge all` | same, once per root | every root of this branch → this branch |
-| `git grove merge --abort` / `--continue` | `git merge --abort` · `git merge --continue` | from the worktree that is mid-merge |
-| `git grove finish <source> [target] --apply` | the merge above, then `git worktree remove` · `git config --unset groveParent` · `git branch -D` | preview unless `--apply`. Target defaults to the parent, else the branch you stand in. Refuses: protected source, standing inside it, roots under it, dirty source (`-f`). |
-| `git grove finish .` | the merge, then prints the target folder | from inside the root you are finishing; the `grove` shell function cds to the target and runs the rm |
-| `git grove finish --continue` | `git merge --continue`, then the removal | the source is found from `MERGE_HEAD` |
-| `git grove destroy <dir>` | `rm -rf <dir>` | type the folder name to confirm (`-y` skips). Refuses dirty worktrees unless `-f`. |
-
-Conflicts: the merge stops with markers in the files and `MERGE_HEAD` set; your prompt shows
-`(branch|MERGING)` and `list` shows a `MERGING` badge. Resolve, `git add`, then `--continue` — or
-`--abort` to go back to before the merge.
-
-## One color per tree (v2)
-
-| Command | What it does |
-|---|---|
-| `git grove color [branch]` | the tree's color as `#rrggbb`; roots share their tree's. A stable hash of the tree name, so `feature/x` is the same color everywhere. |
-| `git grove color feature/x --set '#1f2a44'` | pin a color (`git config branch.feature/x.groveColor`) |
-| `git grove paint` | prints the escape codes that tint this terminal's background (and the Windows Terminal tab) for the tree you stand in, or reset them outside a grove |
-
-Sourcing `git-grove.bash` runs `paint` after every prompt (bash only). Off switch:
-`git config --global grove.paint false`. Own palette: `git config grove.palette "#hex #hex ..."`.
-Works in Windows Terminal, Git Bash (mintty), and VS Code's terminal; Rider's terminal does not support it,
-and `paint` stays silent there.
+The shell wrapper `ent` (sourced from completions/ent.bash) calls `git ent` and
+`cd`s into the new path for `init`, `add`, and `add twig`.
