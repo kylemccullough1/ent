@@ -5,7 +5,7 @@
 # `git <subcommand> ...`, so defining _git_ent is all it takes to complete `git ent <TAB>`.
 
 _git_ent_verbs="init branch twig rm sync list path up down go destroy help"
-_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --print-path --no-track --from --yes --abort --continue --pull --rebase --ff-only"
+_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --yes --win --abort --continue"
 
 _git_ent_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
 
@@ -46,8 +46,8 @@ ent() {
   case "${1:-}" in
     init|branch|twig|go|up|down)
       local p
-      p="$(git ent "$@" --print-path)" || return $?
-      cd "$p" ;;
+      p="$(git ent "$@")" || return $?
+      if [[ -n "$p" ]]; then cd "$p"; fi ;;
     *) git ent "$@" ;;
   esac
 }

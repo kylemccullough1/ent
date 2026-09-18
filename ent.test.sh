@@ -24,7 +24,7 @@ expect_fail() { local msg="$1" want="$2"; shift 2
   elif grep -qF -- "$want" "$T/err"; then pass "$msg"
   else fail "$msg (stderr lacks '$want'): $(tr '\n' ' ' <"$T/err")"; fi; }
 Norm() { (cd "$1" && { cygpath -ml "$PWD" 2>/dev/null || pwd -P; }); }
-ent() { local d="$1"; shift; (cd "$d" && bash "$G" "$@"); }
+ent() { local d="$1"; shift; (cd "$d" && "$BASH" "$G" "$@"); }
 
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
@@ -248,18 +248,18 @@ printf 'y\ny\n' | ent "$T/g1/branches/feature/merge-test/core" branch merge >/de
 [[ -f "$T/g1/main/core/hello.txt" ]] && pass "merge into main landed" || fail "merge into main landed"
 [[ ! -d "$T/g1/branches/feature/merge-test" ]] && pass "merge finish removed worktree" || fail "merge finish removed worktree"
 
-step "sync --pull"
+step "sync pulls main"
 mkdir "$T/remote" && (cd "$T/remote" && git init -q -b main . && echo a >a.txt && git add . && git commit -qm init)
 cd "$T"
-bash "$G" init "$T/remote" syncent >/dev/null
+"$BASH" "$G" init "$T/remote" syncent >/dev/null
 echo b >"$T/remote/b.txt" && (cd "$T/remote" && git add . && git commit -qm second)
-ent "$T/syncent/main/core" sync --pull -y >/dev/null
+ent "$T/syncent/main/core" sync -y >/dev/null
 [[ -f "$T/syncent/main/core/b.txt" ]] && pass "sync pulled" || fail "sync pull"
 
 step "sync merges main into all worktrees"
 mkdir "$T/sync2" && (cd "$T/sync2" && git init -q -b main . && echo a >a.txt && git add . && git commit -qm init)
 cd "$T"
-bash "$G" init "$T/sync2" syncent2 >/dev/null
+"$BASH" "$G" init "$T/sync2" syncent2 >/dev/null
 ent "$T/syncent2" branch sync-branch >/dev/null
 echo b >"$T/sync2/b.txt" && (cd "$T/sync2" && git add . && git commit -qm second)
 ent "$T/syncent2/main/core" sync >/dev/null
@@ -268,9 +268,9 @@ ent "$T/syncent2/main/core" sync >/dev/null
 
 step "destroy"
 cd "$T"
-bash "$G" init doomed >/dev/null
+"$BASH" "$G" init doomed >/dev/null
 ent "$T/doomed/main/core" branch feature/d >/dev/null
-bash "$G" destroy "$T/doomed" --force >/dev/null
+"$BASH" "$G" destroy "$T/doomed" --force >/dev/null
 [[ ! -d "$T/doomed" ]] && pass "destroy removed ent" || fail "destroy"
 
 echo
