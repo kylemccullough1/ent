@@ -86,8 +86,12 @@ ent_depth() {
 
 # ent_container <branch>: absolute container path for a branch
 #   main             -> ENT/main
-#   root branch      -> ENT/branches/<slug>
+#   root branch      -> ENT/branches/<branch-path>
 #   twig             -> $(ent_container parent)/twigs/<twigname>
+#
+# Root branch names keep their slash separators as directory separators, so
+# feature/site lives at ENT/branches/feature/site and feature/test is a sibling
+# at ENT/branches/feature/test.
 ent_container() {
   local b="$1" main p twig
   main="$(ent_main)"
@@ -97,7 +101,7 @@ ent_container() {
   fi
   p="$(ent_parent "$b")"
   if [[ -z "$p" ]]; then
-    printf '%s/branches/%s' "${ENT}" "$(ent_slug "$b")"
+    printf '%s/branches/%s' "${ENT}" "$b"
   else
     twig="$(ent_twigname "$b")"
     printf '%s/twigs/%s' "$(ent_container "$p")" "$twig"
@@ -109,15 +113,81 @@ ent_core() {
   printf '%s/core' "$(ent_container "$1")"
 }
 
-# ent_branch_of_cwd: print current branch if cwd is inside a core/ worktree
+# ent_parent_core <branch>: core path of parent, or the ent root when no parent
+ent_parent_core() {
+  local p
+  p="$(ent_parent "$1")"
+  if [[ -n "$p" ]]; then
+    ent_core "$p"
+  else
+    printf '%s' "${ENT}"
+  fi
+}
+
+# ent_child_cores <branch>: core paths of every direct child of a branch
+ent_child_cores() {
+  local b="$1" c
+  for c in $(ent_children "$b"); do
+    ent_core "$c"
+  done
+}
+
+# ent_branch_of_cwd: print current branch if cwd is inside an ent container
+# (either inside core/ or in the container directory that holds core/ and twigs/).
 ent_branch_of_cwd() {
+  local top root cwd container branch path best_branch best_len
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$top" ]]; then
+    top="$(ent_norm "$top")"
+    if [[ "$(basename "$top")" == "core" ]]; then
+      git symbolic-ref --short -q HEAD 2>/dev/null && return 0
+    fi
+  fi
+
+  root="$(ent_root 2>/dev/null)" || return 1
+  cwd="$(ent_norm "$PWD")"
+
+  # Use a local ENT so ent_load_worktrees reads from the ent we discovered.
+  local ENT="$root"
+  ent_load_worktrees
+
+  best_branch=""; best_len=0
+  for branch in "${!ENT_WT_PATH[@]}"; do
+    path="${ENT_WT_PATH[$branch]}"
+    container="${path%/core}"
+    [[ "$cwd" == "$container" || "$cwd" == "$container"/* ]] || continue
+    if (( ${#container} > best_len )); then
+      best_len=${#container}
+      best_branch="$branch"
+    fi
+  done
+
+  [[ -n "$best_branch" ]] && printf '%s\n' "$best_branch" && return 0
+  return 1
+}
+
+# ent_branch_of_core: like ent_branch_of_cwd, but only succeeds when cwd is
+# inside an actual core/ worktree. Commands that operate on a checked-out branch
+# (twig, branch merge) should require this.
+ent_branch_of_core() {
   local top
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [[ -n "$top" ]] || return 1
   top="$(ent_norm "$top")"
-  # must end in /core
   [[ "$(basename "$top")" == "core" ]] || return 1
   git symbolic-ref --short -q HEAD 2>/dev/null || return 1
+}
+
+# ent_branch_name_for_arg <arg>: derive a branch name from the current branch namespace.
+ent_branch_name_for_arg() {
+  local arg="$1" cur
+  cur="$(ent_branch_of_cwd 2>/dev/null || true)"
+  [[ -n "$cur" && "$cur" != "$(ent_main)" && "$arg" != */* ]] || { printf '%s' "$arg"; return; }
+  if [[ "$cur" == */* ]]; then
+    printf '%s/%s' "${cur%/*}" "$arg"
+  else
+    printf '%s' "$arg"
+  fi
 }
 
 # ent_load_worktrees: populate ENT_WT_PATH and ENT_WT_BRANCH from porcelain

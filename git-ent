@@ -20,7 +20,7 @@ else
 fi
 
 # ---------- global options (parsed once, accepted anywhere on the line) ----------
-DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 APPLY=0 PRINT_PATH=0 NO_TRACK=0
+DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 PRINT_PATH=0 NO_TRACK=0
 PULL=0 MERGE_ABORT=0 MERGE_CONTINUE=0
 FROM="" YES=0 SET_COLOR=""
 PULL_MODE=ff-only
@@ -42,8 +42,10 @@ die()   { printf '%sgit ent: %s%s\n' "$E_RED" "$1" "$E_RST" >&2; exit "${2:-1}";
 usage_die() { die "usage: ent $1"; }
 
 # run: a command that changes something. Echoed; skipped under --dry-run.
-run()   { say "$@"; if (( DRY_RUN )); then return 0; fi; "$@"; }
-runat() { local d="$1"; shift; say "$@"; if (( DRY_RUN )); then return 0; fi; (cd "$d" && "$@"); }
+# Subcommand stdout is redirected to stderr so that commands invoked through
+# the `ent` wrapper only return the intended path on stdout.
+run()   { say "$@"; if (( DRY_RUN )); then return 0; fi; "$@" >&2; }
+runat() { local d="$1"; shift; say "$@"; if (( DRY_RUN )); then return 0; fi; (cd "$d" && "$@") >&2; }
 # query: read-only command; echoed under -v.
 query() { if (( VERBOSE )); then say "$@"; fi; "$@"; }
 
@@ -61,8 +63,7 @@ parse_args() {
       --help|-h)         HELP=1 ;;
       --force|-f)        FORCE=1 ;;
       --recursive|-r)    RECURSIVE=1 ;;
-      --apply)           APPLY=1 ;;
-      --repair)          APPLY=1 ;;
+      --apply)           die "unknown option: $1" ;;
       --print-path)      PRINT_PATH=1 ;;
       --no-track)        NO_TRACK=1 ;;
       --from)            FROM="${2:-}"; shift; [[ -n "$FROM" ]] || die "--from requires a value" ;;
@@ -90,16 +91,17 @@ Usage: ent <verb> [options] [args]
 
 Verbs:
   init <source> [dir]       create a new ent from a URL, local clone, or name
-  add <branch>              create a top-level branch
-  add twig <name>           create a twig from the current branch or --from
-  rm <branch> [--apply]     preview / remove a branch and its container
-  merge <target|parent|siblings|all>
-                            merge another branch into the current one
-  sync [--pull [--rebase]]  fetch; optionally fast-forward every clean worktree
+  branch <branch>           create a top-level branch
+  branch merge [target]     merge the current branch into target (default main)
+  twig <name>               create a twig from the current branch or --from
+  rm <branch> [--recursive] [--force]
+                            preview / remove a branch and its container
+  sync [--pull [--ff-only | --rebase]]
+                            fetch; optionally fast-forward every clean worktree
   list                      list branches and twigs as a tree
-  path <branch>             print the core/ path of a branch
-  check [--repair]          report inconsistencies, optionally move worktrees back
-  destroy <dir>             delete a whole ent
+  path <branch> [--print-path]
+                            print the core/ path of a branch
+  destroy <dir> [--force]   delete a whole ent
 EOF
 }
 
@@ -277,11 +279,12 @@ ent_rm_one() {
   rmdir "$container" 2>/dev/null || true
 }
 
-# ---------- add ----------
-cmd_add() {
+# ---------- branch ----------
+cmd_branch() {
   ensure_ent
-  local branch="${ARGS[1]:-}" pat base core_dir container
-  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "add <branch>"
+  local given="${ARGS[1]:-}" branch pat base core_dir container
+  [[ -n "$given" && -z "${ARGS[2]:-}" ]] || usage_die "branch <branch> [--from <base>]"
+  branch="$(ent_branch_name_for_arg "$given")"
   _has_local "$branch" && die "branch '$branch' already exists"
   pat="$(branch_pattern)"
   if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
@@ -294,7 +297,7 @@ cmd_add() {
   fi
   container="$(ent_container "$branch")"
   if [[ -z "$(ent_parent "$branch")" ]]; then
-    [[ "$branch" != "$(_default_branch)" ]] || die "use 'add <branch>' for the default branch is not needed; it already exists"
+    [[ "$branch" != "$(_default_branch)" ]] || die "use 'branch <branch>' for the default branch is not needed; it already exists"
   fi
   core_dir="$(ent_core "$branch")"
   [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
@@ -303,16 +306,17 @@ cmd_add() {
   emit_path "$core_dir" "Created branch $branch at $core_dir"
 }
 
-cmd_add_twig() {
+cmd_twig() {
   ensure_ent
-  local name="${ARGS[2]:-}" parent branch container core_dir slug max_d depth
-  [[ -n "$name" && -z "${ARGS[3]:-}" ]] || usage_die "add twig <name> [--from <parent>]"
+  local name="${ARGS[1]:-}" parent branch container core_dir slug max_d depth
+  [[ -n "$name" && -z "${ARGS[2]:-}" ]] || usage_die "twig <name> [--from <parent>]"
   if [[ -n "$FROM" ]]; then
     parent="$FROM"
   else
-    parent="$(ent_branch_of_cwd)" || die "add twig <name> requires --from <parent> or cwd inside a core worktree"
+    parent="$(ent_branch_of_cwd)" || die "ent twig <name> must be inside a branch or twig, or use --from"
   fi
   _has_local "$parent" || die "parent branch '$parent' not found"
+  [[ "$parent" != "$(ent_main)" || -n "$FROM" ]] || die "ent twig <name> must be inside a branch or twig, or use --from"
   branch="$parent-$name"
   _has_local "$branch" && die "branch '$branch' already exists"
   slug="$(ent_dashed "$branch")"
@@ -337,7 +341,7 @@ cmd_rm() {
   ensure_ent
   cd "$ENT"   # avoid being inside the worktree we are about to remove
   local branch="${ARGS[1]:-}" main prot child targets
-  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "rm <branch> [--apply] [--recursive] [--force]"
+  [[ -n "$branch" && -z "${ARGS[2]:-}" ]] || usage_die "rm <branch> [--recursive] [--force]"
   main="$(ent_main)"
   [[ "$branch" != "$main" ]] || die "cannot remove the default branch '$main'"
   prot="$(cfg protect) $main"
@@ -350,29 +354,16 @@ cmd_rm() {
     die "branch '$branch' has twigs; pass --recursive to remove them too"
   fi
 
-  # preview / dry run
-  if ! (( APPLY )); then
-    echo "Would remove:"
-    printf '  %s\n' $targets
-    echo "Pass --apply to remove."
-    return 0
-  fi
-
-  # Safety: check dirty worktrees first (unless FORCE)
-  if ! (( FORCE )); then
-    for b in $(printf '%s\n' $targets | sort -u); do
-      if ent_worktree_dirty "$(ent_core "$b")"; then
-        die "branch '$b' has uncommitted changes; pass --force or commit them"
-      fi
-    done
-  fi
+  # preview
+  echo "Will remove:"
+  printf '  %s\n' $targets
+  confirm "Remove $branch?" || { note "Cancelled."; return 0; }
 
   ent_rm_recursive "$branch"
   note "Removed $branch"
 }
 
-# ---------- list / path / check ----------
-# Return marker chars for a branch: '?' = moved, '!' = dangling parent.
+# ---------- list / path ----------
 ent_branch_markers() {
   local b="$1" actual expected p markers=""
   expected="$(ent_norm "$(ent_core "$b")")"
@@ -430,46 +421,59 @@ cmd_path() {
   fi
 }
 
-cmd_check() {
-  ensure_ent; cd "$ENT"
-  ent_load_worktrees
-  local bad=0 b actual expected
-  # 1. worktrees not at their derived path
-  for b in $(_g branch --format='%(refname:short)'); do
-    actual="${ENT_WT_PATH[$b]:-}"
-    [[ -n "$actual" ]] || continue
-    expected="$(ent_norm "$(ent_core "$b")")"
-    if [[ "$actual" != "$expected" ]]; then
-      echo "moved: $b"
-      echo "  actual:   $actual"
-      echo "  expected: $expected"
-      bad=1
+# ---------- navigation ----------
+cmd_up() {
+  ensure_ent
+  local b; b="$(ent_branch_of_cwd)" || die "up from outside a worktree"
+  emit_path "$(ent_parent_core "$b")"
+}
+
+cmd_down() {
+  ensure_ent
+  local b="" name="${ARGS[1]:-}" children child first rest match
+  b="$(ent_branch_of_cwd 2>/dev/null || true)"
+  if [[ -z "$b" ]]; then
+    # At the ent root or outside any branch: offer main + all root branches.
+    children="$(ent_main) $(ent_top_branches)"
+  else
+    children="$(ent_children "$b")"
+  fi
+  children="$(printf '%s\n' $children | sed '/^$/d' | sort)"
+  [[ -n "$children" ]] || die "no children to move down into"
+  if [[ -z "$name" ]]; then
+    first="$(printf '%s\n' "$children" | head -n1)"
+    rest="$(printf '%s\n' "$children" | tail -n +2)"
+    [[ -z "$rest" ]] || { echo "Multiple choices:" >&2; printf '  %s\n' $children >&2; die "run 'ent down <name>'"; }
+    emit_path "$(ent_core "$first")"
+    return
+  fi
+  match=""
+  for child in $children; do
+    local twig; twig="$(ent_twigname "$child")"
+    if [[ "$child" == "$name" || "$twig" == "$name" || "$(ent_slug "$child")" == "$name" ]]; then
+      if [[ -n "$match" ]]; then
+        echo "Multiple choices: $match $child" >&2
+        die "run 'ent down <name>'"
+      fi
+      match="$child"
     fi
   done
+  [[ -n "$match" ]] || die "no child matches '$name'"
+  emit_path "$(ent_core "$match")"
+}
 
-  # 2. dangling parent configs
-  local key parent p
-  git -C "$ENT" config --get-regexp '^branch\..*\.entparent$' 2>/dev/null | while IFS=' ' read -r key parent; do
-    b="${key#branch.}"; b="${b%.entparent}"
-    if ! _has_local "$parent" && [[ -n "$parent" ]]; then
-      echo "dangling parent: $b -> $parent"; bad=1
-    fi
-  done || true
-
-  # --repair only moves worktrees back; it never deletes.
-  if (( APPLY )); then
-    for b in $(_g branch --format='%(refname:short)'); do
-      actual="${ENT_WT_PATH[$b]:-}"
-      [[ -n "$actual" ]] || continue
-      expected="$(ent_norm "$(ent_core "$b")")"
-      if [[ "$actual" != "$expected" && ! -e "$expected" ]]; then
-        run _g worktree move "$actual" "$expected"
-      fi
-    done
-    bad=0
-  fi
-
-  (( bad )) && return 1 || return 0
+cmd_go() {
+  ensure_ent
+  local name="${ARGS[1]:-}"
+  [[ -n "$name" && -z "${ARGS[2]:-}" ]] || usage_die "go <name>"
+  local b
+  for b in $(_g branch --format='%(refname:short)'); do
+    [[ "$b" == "$name" ]] && emit_path "$(ent_core "$b")" && return
+  done
+  for b in $(_g branch --format='%(refname:short)'); do
+    [[ "$(ent_slug "$b")" == "$name" ]] && emit_path "$(ent_core "$b")" && return
+  done
+  die "no branch matches '$name'"
 }
 
 # ---------- merge / sync ----------
@@ -478,10 +482,8 @@ branch_at_commit() { _g for-each-ref --points-at "$1" --format='%(refname:short)
 
 confirm() {
   if (( YES )); then return 0; fi
-  [[ -t 0 ]] || die "$1 -- no terminal to ask on; pass -y/--yes to confirm"
   local a; read -r -p "$1 [y/N] " a
-  if [[ "$a" =~ ^[yY]$ ]]; then return 0; fi
-  note "Cancelled."; return 1
+  [[ "$a" =~ ^[yY]$ ]]
 }
 
 ent_worktree_exists() {
@@ -498,7 +500,7 @@ do_merge() {
   tp="$(ent_core "$tgt")"
   ent_load_worktrees
   [[ -n "${ENT_WT_PATH[$tgt]:-}" ]] || die "$tgt has no worktree to merge into"
-  if [[ -f "$(merge_head_of "$tp")" ]]; then die "$tgt is already mid-merge. Use --abort or --continue from $tp"; fi
+  if [[ -f "$(merge_head_of "$tp")" ]]; then die "$tgt is already mid-merge. Use branch merge --abort or branch merge --continue from $tp"; fi
   if ent_worktree_dirty "$tp"; then die "$tgt has uncommitted changes in $tp"; fi
   if _g merge-base --is-ancestor "$src" "$tgt"; then note "$tgt already contains $src"; return 0; fi
   note "Changes $src would bring into $tgt:"
@@ -509,7 +511,7 @@ do_merge() {
   if [[ -f "$(merge_head_of "$tp")" ]]; then
     warn "conflicts merging $src into $tgt"
     git -C "$tp" diff --name-only --diff-filter=U >&2
-    note "Resolve in $tp, then: ent merge --continue (or --abort)"
+    note "Resolve in $tp, then: ent branch merge --continue (or --abort)"
     return 1
   fi
   die "git merge failed in $tp"
@@ -534,62 +536,73 @@ merge_abort_or_continue() {
   return 1
 }
 
-cmd_merge() {
+cmd_branch_merge() {
   ensure_ent
   if merge_abort_or_continue; then return 0; fi
-  local what="${ARGS[1]:-}"; [[ -n "$what" ]] || usage_die "merge <target|parent|siblings|all>"
-  local src; src="$(ent_branch_of_cwd)" || die "run merge from inside a core worktree that is on a branch"
+  local what="${ARGS[1]:-}" target src child
+  [[ -n "$what" && "$what" == "merge" ]] || usage_die "branch merge [target]"
+  src="$(ent_branch_of_core)" || die "run from inside a core worktree"
+  target="${ARGS[2]:-main}"
+  _has_local "$target" || die "no branch '$target'"
+  [[ "$src" != "$target" ]] || die "cannot merge $src into itself"
   ent_load_worktrees   # cache worktree paths
-  local T=$'\t' par k
-  local -a pairs=()
-  case "$what" in
-    parent)
-      par="$(ent_parent "$src")"; [[ -n "$par" ]] || die "$src is a top-level branch; it has no parent"
-      pairs+=("$src$T$par") ;;
-    siblings)
-      par="$(ent_parent "$src")"; [[ -n "$par" ]] || die "$src is a top-level branch; only twigs have siblings"
-      for k in $(ent_children "$par"); do if [[ "$k" != "$src" ]]; then pairs+=("$k$T$src"); fi; done
-      (( ${#pairs[@]} > 0 )) || { note "$src has no siblings"; return 0; } ;;
-    all)
-      for k in $(ent_children "$src"); do pairs+=("$k$T$src"); done
-      (( ${#pairs[@]} > 0 )) || { note "$src has no twigs"; return 0; } ;;
-    *)
-      _has_local "$what" || die "no branch '$what'"
-      pairs+=("$src$T$what") ;;
-  esac
-  local pr
-  for pr in "${pairs[@]}"; do
-    do_merge "${pr%%$T*}" "${pr#*$T}" || return 1
-  done
+
+  if [[ -n "$(ent_children "$src")" ]]; then
+    confirm "Also merge twigs of $src into $src before merging into $target?" || return 1
+    for child in $(ent_children "$src"); do
+      do_merge "$child" "$src" || return 1
+    done
+  fi
+
+  do_merge "$src" "$target" || return 1
+  ent_rm_recursive "$src"
+  note "Merged and finished $src"
 }
 
 cmd_sync() {
   ensure_ent; cd "$ENT"
   run _g fetch --all --prune
-  if (( PULL )); then
-    local p b up
-    ent_load_worktrees
-    for b in $(_g branch --format='%(refname:short)'); do
-      p="${ENT_WT_PATH[$b]:-}"
-      [[ -n "$p" ]] || continue
-      up="$(_g rev-parse --abbrev-ref "$b@{u}" 2>/dev/null || true)"
-      [[ -n "$up" ]] || { note "skip $b: no upstream"; continue; }
-      if ent_worktree_dirty "$p"; then note "skip $b: uncommitted changes"; continue; fi
-      if [[ "$PULL_MODE" == rebase ]]; then
-        run git -C "$p" rebase "$up" || warn "$b: rebase stopped on conflicts"
-      else
-        if ! run git -C "$p" merge --ff-only "$up"; then
-          warn "skip $b: diverged from $up"
-        fi
+  ent_load_worktrees
+  local b main stale up main_path
+  main="$(ent_main)"
+  stale=""
+  # Keep main current so merging main into other worktrees advances them too.
+  main_path="${ENT_WT_PATH[$main]:-}"
+  if [[ -n "$main_path" ]] && ! ent_worktree_dirty "$main_path"; then
+    up="$(_g rev-parse --abbrev-ref "$main@{u}" 2>/dev/null || true)"
+    [[ -n "$up" ]] && run git -C "$main_path" merge --ff-only "$up" || true
+  fi
+  for b in $(_g branch --format='%(refname:short)'); do
+    local p="${ENT_WT_PATH[$b]:-}"
+    [[ -n "$p" ]] || continue
+    [[ "$b" != "$main" ]] || continue
+    if ent_worktree_dirty "$p"; then warn "skip $b: uncommitted changes"; continue; fi
+    run git -C "$p" merge --ff-only "$main" || warn "$b: could not fast-forward to $main"
+  done
+  for b in $(_g branch --format='%(refname:short)'); do
+    [[ "$b" != "$main" ]] || continue
+    _g show-ref --verify -q "refs/remotes/origin/$b" 2>/dev/null && continue
+    if _g merge-base --is-ancestor "$b" "$main" 2>/dev/null; then stale+=" $b"; fi
+  done
+  if [[ -n "$stale" ]]; then
+    echo "Local branches merged into $main with no remote tracking branch:"
+    printf '  %s\n' $stale
+    if [[ -t 0 ]]; then
+      if confirm "Remove these local branches and their worktrees?"; then
+        for b in $stale; do
+          ent_rm_recursive "$b" || warn "could not remove $b"
+        done
       fi
-    done
+    else
+      echo "Run interactively to clean them up."
+    fi
   fi
   cmd_list
 }
 
 cmd_destroy() {
   local dir="${ARGS[1]:-}"
-  [[ -n "$dir" && -z "${ARGS[2]:-}" ]] || usage_die "destroy <dir> [-f/--force]"
+  [[ -n "$dir" && -z "${ARGS[2]:-}" ]] || usage_die "destroy <dir> [--force]"
   [[ -d "${dir}/.bare" ]] || die "'$dir' is not an ent (no .bare)"
   if ! (( FORCE )); then
     [[ -t 0 ]] || die "refusing to destroy without a terminal; pass --force"
@@ -605,19 +618,20 @@ main() {
   local verb="${ARGS[0]:-}"
   [[ -n "$verb" ]] || { usage; exit 1; }
   case "$verb" in
-    init)       cmd_init ;;
-    add)
-      if [[ "${ARGS[1]:-}" == "twig" ]]; then cmd_add_twig; else cmd_add; fi ;;
-    rm)        cmd_rm ;;
-    list)      cmd_list ;;
-    path)      cmd_path ;;
-    check)     cmd_check ;;
-    merge)     cmd_merge ;;
-    sync)      cmd_sync ;;
-    destroy)   cmd_destroy ;;
-    finish)
-      die "finish not implemented" ;;
-    *)          die "unknown verb: $verb" ;;
+    init)          cmd_init ;;
+    branch)
+      if [[ "${ARGS[1]:-}" == "merge" ]]; then cmd_branch_merge; else cmd_branch; fi ;;
+    twig)          cmd_twig ;;
+    rm)            cmd_rm ;;
+    list)          cmd_list ;;
+    path)          cmd_path ;;
+    up)            cmd_up ;;
+    down)          cmd_down ;;
+    go)            cmd_go ;;
+    sync)          cmd_sync ;;
+    destroy)       cmd_destroy ;;
+    help)          usage ;;
+    *)             die "unknown verb: $verb" ;;
   esac
 }
 
