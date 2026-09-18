@@ -42,8 +42,8 @@ git clone <this repo> && cd <repo>
 ```
 
 `install.sh` prints one line for `~/.bashrc`: the `source` for tab completion
-and the `ent` wrapper. After that `git ent` works everywhere, and `ent add ...`
-will also `cd` into the new worktree for you.
+and the `ent` wrapper. After that `git ent` works everywhere, and `ent branch`
+and `ent twig` will also `cd` into the new worktree for you.
 
 ## Use
 
@@ -52,15 +52,16 @@ ent init my-app                    # new repo -> my-app/.bare, my-app/main/core/
 ent init git@host:org/repo.git     # from a remote
 ent init ../old-clone new-ent      # from an existing clone (left untouched)
 
-ent add feature/x                  # new top-level branch
-ent add twig auth                  # from inside feature/x/core: branch feature/x-auth
-ent merge parent -y                # merge the current twig into its parent
-ent up                             # if supported by your shell wrapper, cd to parent
+ent branch feature/x               # new top-level branch
+ent twig auth                      # from inside feature/x/core: branch feature/x-auth
+ent branch merge -y                # merge current branch into its parent and finish
+ent up                             # cd to parent
 ent down auth                      # cd into a twig
+ent go feature/x                   # cd to a named branch or twig
 ent list                           # everything, twigs nested under their parents
-ent rm feature/x-auth              # preview what would go
-ent rm feature/x-auth --apply      # do it
-ent sync --pull                    # fetch everything, fast-forward every clean worktree
+ent rm feature/x-auth              # remove a branch (confirms)
+ent rm feature/x-auth -f           # remove without prompting
+ent sync                           # fetch all; merge main into worktrees
 ```
 
 `git ent help` prints the cheat sheet.
@@ -88,6 +89,30 @@ to start. Keys:
 
 Precedence: `ENT_<KEY>` env → `ent.<key>` in `.bare/config` → `.entrc` →
 built-in. `protect` is a union of every layer.
+
+## Shell prompt
+
+Because only `core/` directories are real git worktrees, a plain git prompt
+shows the bare repo's default branch (`main`) when you are in an ent container.
+
+If you already use Git Bash / git-prompt.sh, just source the ent completion
+file after git-prompt in your `~/.bashrc`:
+
+```bash
+source "$SHARE/completions/ent.bash"
+```
+
+Ent automatically makes `__git_ps1` container-aware, so `branches/logic/`
+will display `(logic)`.
+
+For custom prompts, the underlying helper is also available:
+
+```bash
+PS1='[\u@\h \W$(__ent_ps1 ":%s")]\$ '
+```
+
+`__ent_ps1` prints the resolved ent branch (or nothing when cwd is outside
+an ent), so it composes safely with any existing prompt.
 
 ## Developing ent itself
 
