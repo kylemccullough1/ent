@@ -369,6 +369,17 @@ ent "$T/doomed/main/core" branch feature/d >/dev/null
 "$BASH" "$G" destroy "$T/doomed" --force >/dev/null
 [[ ! -d "$T/doomed" ]] && pass "destroy removed ent" || fail "destroy"
 
+step "install.sh and uninstall.sh"
+H="$T/home"; mkdir -p "$H"; printf 'export EDITOR=vim\n\nalias ll="ls -la"\n' >"$H/.zshrc"; cp "$H/.zshrc" "$T/zshrc.orig"
+REPO="$(dirname "$G")"
+HOME="$H" SHELL=/bin/zsh XDG_DATA_HOME= "$BASH" "$REPO/install.sh" >/dev/null
+HOME="$H" SHELL=/bin/zsh XDG_DATA_HOME= "$BASH" "$REPO/install.sh" >/dev/null
+check "1" "$(grep -c 'git-ent/completions/ent.zsh' "$H/.zshrc")" "install adds the source line once"
+check "git-ent $("$BASH" "$G" --version | cut -d' ' -f2)" "$("$H/.local/bin/git-ent" --version)" "installed launcher runs"
+HOME="$H" XDG_DATA_HOME= "$BASH" "$H/.local/share/git-ent/uninstall.sh" -y >/dev/null
+[[ ! -e "$H/.local/share/git-ent" && ! -e "$H/.local/bin/git-ent" ]] && pass "uninstall removes files" || fail "uninstall removes files"
+cmp -s "$T/zshrc.orig" "$H/.zshrc" && pass "uninstall restores .zshrc exactly" || fail "uninstall restores .zshrc exactly"
+
 echo
 if (( bad )); then
   echo "SOME FAILURES ($n checks)"

@@ -46,6 +46,10 @@ Open a new terminal and you have the `ent` command (which `cd`s into the folders
 it creates or finds), tab completion, and the prompt helper. `git ent ...` works
 even without the `source` line. Re-run `./install.sh` after pulling updates.
 
+To remove it: `~/.local/share/git-ent/uninstall.sh` (or `./uninstall.sh` from the
+repo). It deletes what the installer added, including the `source` line and its
+comment, and leaves your ents alone.
+
 ## Use
 
 ```bash
@@ -130,6 +134,7 @@ Outside an ent the helper runs no programs at all, so it never slows your prompt
 | `lib/config.sh` | Settings layers and `.entrc`. |
 | `lib/cmd/<verb>.sh` | One verb each, with its `help_<verb>` text. |
 | `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper. |
+| `install.sh`, `uninstall.sh` | Copy into `~/.local`, add or remove the rc `source` line. |
 
 Two conventions run through the code:
 

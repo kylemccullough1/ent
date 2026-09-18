@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install git-ent for the current user. Usage: ./install.sh [bin-dir]
-#   git-ent, lib/, completions/  ->  ~/.local/share/git-ent/
+#   git-ent, lib/, completions/, uninstall.sh  ->  ~/.local/share/git-ent/
 #   a small git-ent launcher     ->  ~/.local/bin/git-ent (or [bin-dir])
 # Copies, not symlinks: re-run after editing.
 set -euo pipefail
@@ -11,8 +11,8 @@ SHARE="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent"
 rm -rf "$SHARE"
 mkdir -p "$BIN" "$SHARE"
 cp -R "$HERE/lib" "$HERE/completions" "$SHARE/"
-cp "$HERE/git-ent" "$SHARE/git-ent"
-chmod 755 "$SHARE/git-ent"
+cp "$HERE/git-ent" "$HERE/uninstall.sh" "$SHARE/"
+chmod 755 "$SHARE/git-ent" "$SHARE/uninstall.sh"
 
 # The launcher on PATH runs the shared copy, which finds lib/ next to itself.
 cat > "$BIN/git-ent" <<LAUNCHER
@@ -67,3 +67,4 @@ fi
 
 echo
 echo "Open a new terminal (or source your rc file), then: ent help"
+echo "To remove git-ent later: $SHARE/uninstall.sh"
