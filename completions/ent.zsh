@@ -39,7 +39,9 @@ _ent() {
 # `git ent <TAB>`: zsh's git completion calls _git-<cmd> for commands it is told about.
 _git-ent() { _ent; }
 zstyle ':completion:*:*:git:*' user-commands ent:'a git worktree per branch, as nested folders'
-if (( $+functions[compdef] )); then compdef _ent ent; fi
+# Load zsh's completion system if ~/.zshrc hasn't already (oh-my-zsh and most setups have).
+if (( ! $+functions[compdef] )); then autoload -Uz compinit && compinit -i; fi
+compdef _ent ent
 
 # ---------- prompt ----------
 # __ent_in_ent: true when an ent's .bare folder sits above the current folder.

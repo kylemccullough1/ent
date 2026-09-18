@@ -32,18 +32,19 @@ content during `sync` needs git 2.38+; older git skips just that check.
 
 ```bash
 git clone https://github.com/kylemccullough1/ent.git && cd ent
-./install.sh          # copies git-ent into ~/.local/share/git-ent, launcher in ~/.local/bin
+./install.sh
 ```
 
-Then add the line install.sh prints to your shell's startup file:
+The installer:
 
-```bash
-source ~/.local/share/git-ent/completions/ent.bash   # ~/.bashrc
-source ~/.local/share/git-ent/completions/ent.zsh    # ~/.zshrc, after compinit
-```
+- copies git-ent into `~/.local/share/git-ent` and puts a launcher in `~/.local/bin`
+- adds one `source` line to `~/.zshrc` or `~/.bashrc` (whichever shell you use),
+  once; re-running it never adds a second copy, and a line you comment out stays
+  commented out. Set `ENT_NO_RC=1` to skip this.
 
-That gives you the `ent` command (which `cd`s into the folders it creates or
-finds), tab completion, and the prompt helper. `git ent ...` works without it.
+Open a new terminal and you have the `ent` command (which `cd`s into the folders
+it creates or finds), tab completion, and the prompt helper. `git ent ...` works
+even without the `source` line. Re-run `./install.sh` after pulling updates.
 
 ## Use
 
