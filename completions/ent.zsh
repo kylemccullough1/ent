@@ -4,6 +4,11 @@
 # `ent` runs `git ent` and, for verbs that print a folder, cds into it.
 # (A program can't change your shell's folder; only a shell function can.)
 ent() {
+  # Help and dry runs print text, not a folder: just show it.
+  local a
+  for a in "$@"; do
+    case "$a" in -h|--help|-n|--dry-run) git ent "$@"; return ;; esac
+  done
   case "${1:-}" in
     init|branch|twig|go|up|down)
       local p

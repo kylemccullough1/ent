@@ -5,7 +5,8 @@ help_sync() { cat <<'EOF'
 sync [branch] [-y]                     update main from origin, then merge main into your work
   1. With an origin: fetch, fast-forward main, then for each branch that is now
      merged into main, ask whether to delete its folder and branch (-y: yes to all).
-     Merge commits, squash merges and rebase merges are all recognized.
+     Merge commits, squash merges and rebase merges are all recognized. Protected
+     branches, uncommitted changes and twigs with unmerged work are always kept.
   2. Merge main into every branch and twig, or only into [branch].
      Folders with uncommitted changes are skipped; conflicts are left for you to
      resolve and listed at the end.
@@ -57,44 +58,54 @@ sync_main() {
 }
 
 # merged_reason <branch> <old-main> <new-main>: print why the branch counts as merged
-# by this pull, or return 1. A branch already in the old main (every brand-new branch
-# is) never counts, so fresh work is never offered for deletion.
+# by this pull, or return 1. Only verifiable facts count:
+#   - its commits are in main now (merge commit), or
+#   - its changes are in main now (squash or rebase merge; needs git 2.38+).
+# A branch that was already in the old main (every brand-new branch is) never counts,
+# and a branch deleted on origin without being merged (a closed PR) is not offered.
 merged_reason() {
-  local b="$1" old="$2" new="$3" track
+  local b="$1" old="$2" new="$3"
   if git -C "$ENT" merge-base --is-ancestor "$b" "$old"; then return 1; fi
   if git -C "$ENT" merge-base --is-ancestor "$b" "$new"; then echo "merged into $S_MAIN"; return 0; fi
-  track="$(git -C "$ENT" for-each-ref --format='%(upstream:track)' "refs/heads/$b")"
-  if [[ "$track" == "[gone]" ]]; then echo "its branch on origin was deleted (squash or rebase merge)"; return 0; fi
-  if content_already_in "$new" "$b" && ! content_already_in "$old" "$b"; then echo "its changes are already in $S_MAIN"; return 0; fi
+  if content_already_in "$new" "$b" && ! content_already_in "$old" "$b"; then
+    echo "its changes are in $S_MAIN (squash or rebase merge)"; return 0
+  fi
   return 1
 }
 
-# content_already_in <commit> <branch>: true when merging <branch> into <commit> would change
-# nothing, i.e. its content is already there. Needs git 2.38+ (merge-tree --write-tree);
-# on older git this check is skipped.
+# content_already_in <commit> <branch>: true when merging <branch> into <commit> would
+# change nothing, i.e. the branch's changes are already there. Uses
+# merge-tree --write-tree (git 2.38+); on older git it is always false.
 content_already_in() {
   local tree
   tree="$(git -C "$ENT" merge-tree --write-tree "$1" "$2" 2>/dev/null | head -n 1)" || return 1
   [[ -n "$tree" && "$tree" == "$(git -C "$ENT" rev-parse "$1^{tree}")" ]]
 }
 
+# in_main <branch>: its commits or its changes are in main.
+in_main() {
+  git -C "$ENT" merge-base --is-ancestor "$1" "$S_MAIN" || content_already_in "$S_MAIN" "$1"
+}
+
 # offer_removal <branch> <reason>: ask, then remove the branch, its twigs, and their folders.
+# Keeps everything when anything in the tree is protected, has uncommitted changes,
+# or (for twigs) holds work that is not in main.
 offer_removal() {
   local b="$1" reason="$2" kids t
   kids="$(ent_descendants "$b")"
   note ""
   note "$b: $reason."
-  if [[ -n "$kids" ]]; then
-    for t in $kids; do
-      if git -C "$ENT" merge-base --is-ancestor "$t" "$S_MAIN"; then note "  twig $t"
-      else note "  twig $t (has commits that are not in $S_MAIN)"; fi
-    done
-  fi
   for t in "$b" $kids; do
-    if wt_path_of "$t" && worktree_dirty "$REPLY"; then warn "keeping $b: $t has uncommitted changes"; return 0; fi
+    if is_protected "$t"; then note "Keeping $b: $t is protected."; return 0; fi
+    if wt_path_of "$t" && worktree_dirty "$REPLY"; then note "Keeping $b: $t has uncommitted changes."; return 0; fi
+  done
+  for t in $kids; do
+    in_main "$t" || { note "Keeping $b: twig $t has work that is not in $S_MAIN."; return 0; }
+    note "  twig $t (also in $S_MAIN)"
   done
   confirm "Delete $b${kids:+ and its twigs}, folders and branches?" || { note "Kept $b."; return 0; }
-  # You confirmed, so squash-merged branches that git calls "unmerged" go too.
+  # Every branch in the tree is verified to be in main, so a squash-merged branch
+  # that git calls "unmerged" may be deleted.
   local FORCE=1
   rm_tree "$b"
   note "Removed $b."

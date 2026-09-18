@@ -24,9 +24,19 @@ merged_into_parent() {
   git -C "$ENT" merge-base --is-ancestor "$1" "$S_MAIN" 2>/dev/null
 }
 
+# is_protected <branch>: the default branch, or listed in the protect setting.
+is_protected() {
+  local p
+  [[ "$1" != "$S_MAIN" ]] || return 0
+  for p in $(cfg_all protect); do [[ "$1" != "$p" ]] || return 0; done
+  return 1
+}
+
+# rm_one <branch>: remove one branch's worktree, git branch, parent record and folders.
 rm_one() {
   local b="$1" core_dir container
   core_dir="$(ent_core "$b")" container="$(ent_container "$b")"
+  if (( DRY_RUN )); then note "(dry run) would remove $b and $container"; return 0; fi
   if [[ -d "$core_dir" ]] && worktree_dirty "$core_dir"; then
     (( FORCE )) || die "branch '$b' has uncommitted changes; pass --force or commit them"
     warn "force-removing dirty worktree $b"
@@ -50,11 +60,11 @@ rm_one() {
 cmd_rm() {
   ensure_ent
   cd "$ENT"   # never stand inside a worktree that is about to be removed
-  local branch p
+  local branch
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "rm <branch> [-r] [-f]"
   [[ "$branch" != "$S_MAIN" ]] || die "cannot remove the default branch '$S_MAIN'"
-  for p in $(cfg_all protect); do [[ "$branch" != "$p" ]] || die "branch '$branch' is protected"; done
+  is_protected "$branch" && die "branch '$branch' is protected"
   has_local "$branch" || die "branch '$branch' not found"
   children_of "$branch"
   if (( ${#REPLY_LIST[@]} )) && (( ! RECURSIVE )); then

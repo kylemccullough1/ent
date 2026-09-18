@@ -54,21 +54,33 @@ merge_abort_or_continue() {
 cmd_merge() {
   ensure_ent
   if merge_abort_or_continue; then return 0; fi
-  local src target child
+  local src target
   [[ -z "$(arg 2)" ]] || usage_die "branch merge [-y]   (merges into the parent; no target)"
   src="$(ent_branch_of_core)" || die "run from inside a core worktree"
   [[ "$src" != "$S_MAIN" ]] || die "$S_MAIN has no parent to merge into"
   parent_of "$src"; target="${REPLY:-$S_MAIN}"
   has_local "$target" || die "parent branch '$target' no longer exists"
 
-  children_of "$src"
-  if (( ${#REPLY_LIST[@]} )); then
-    local kids=("${REPLY_LIST[@]}")
-    confirm "Also merge twigs of $src into $src before merging into $target?" || return 1
-    for child in "${kids[@]}"; do do_merge "$child" "$src" || return 1; done
+  if [[ -n "$(ent_children "$src")" ]]; then
+    confirm "Also merge the twigs of $src (all levels) into $src before merging into $target?" || return 1
+    merge_twigs_up "$src" || return 1
   fi
 
   do_merge "$src" "$target" || return 1
+  local target_core; target_core="$(ent_core "$target")"
+  cd "$ENT"   # step out of the folder that is about to be removed
   rm_tree "$src"
-  note "Merged and finished $src"
+  emit_path "$target_core" "Merged and finished $src"
+}
+
+# merge_twigs_up <branch>: merge every twig below <branch> into its parent,
+# deepest first, so nothing below is left unmerged when the tree is removed.
+merge_twigs_up() {
+  local child kids
+  children_of "$1"
+  kids=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
+  for child in ${kids[@]+"${kids[@]}"}; do
+    merge_twigs_up "$child" || return 1
+    do_merge "$child" "$1" || return 1
+  done
 }

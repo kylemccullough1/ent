@@ -43,6 +43,11 @@ _git_ent() { _git_ent_complete 2; }
 # `ent` wrapper for `git ent`: performs the cd for verbs that print a path.
 # Install.sh will source this file; if it is sourced twice, the function is replaced harmlessly.
 ent() {
+  # Help and dry runs print text, not a folder: just show it.
+  local a
+  for a in "$@"; do
+    case "$a" in -h|--help|-n|--dry-run) git ent "$@"; return ;; esac
+  done
   case "${1:-}" in
     init|branch|twig|go|up|down)
       local p

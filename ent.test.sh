@@ -206,9 +206,18 @@ check "feature/456" "$(ent "$T/g1/branches/feature/456/twigs" __where)" "__where
 check "ent" "$(ent "$T/g1" __where)" "__where at the ent root"
 check "" "$(ent "$T" __where)" "__where outside an ent prints nothing"
 
+step "ent wrapper shows help instead of cd-ing into it"
+out="$(cd "$T/g1" && PATH="$(dirname "$G"):$PATH" "$BASH" --norc -c 'source "$1"; ent go --help >/dev/null; pwd -P' _ "$(dirname "$G")/completions/ent.bash" 2>&1)"
+check "$(Norm "$T/g1")" "$out" "ent go --help leaves the folder alone"
+
 step "git-ent works through a symlink"
 mkdir -p "$T/linkbin" && ln -s "$G" "$T/linkbin/git-ent"
 check "$(Norm "$T/g1/branches/feature/456/core")" "$(cd "$T/g1" && "$BASH" "$T/linkbin/git-ent" go feature/456)" "symlinked git-ent finds lib/"
+
+step "rm --dry-run changes nothing"
+printf 'y\n' | ent "$T/g1" rm feature/a-auth -r -n >/dev/null 2>&1
+check "feature/a" "$(git -C "$T/g1/.bare" config branch.feature/a-auth.entParent)" "dry run kept the twig's parent record"
+[[ -d "$T/g1/branches/feature/a/twigs/auth/core" ]] && pass "dry run kept the twig folder" || fail "dry run kept the twig folder"
 
 step "rm refuses to remove a branch that has twigs"
 ent "$T/g1" rm feature/a >/dev/null 2>&1 && fail "rm feature/a without recursive" || pass "rm refuses twigs"
@@ -256,6 +265,17 @@ ent "$T/g1/branches/feature/merge/twigs/sub/core" branch merge -y >/dev/null
 [[ ! -d "$T/g1/branches/feature/merge/twigs/sub" ]] && pass "merge finish removed twig" || fail "merge finish removed twig"
 expect_fail "main cannot branch merge" "no parent" ent "$T/g1/main/core" branch merge -y
 
+step "branch merge merges nested twigs, then prints the parent folder"
+ent "$T/g1/main/core" branch feature/nest >/dev/null
+ent "$T/g1/branches/feature/nest/core" twig a >/dev/null
+ent "$T/g1/branches/feature/nest/twigs/a/core" twig b >/dev/null
+commit_in2() { (cd "$1" && echo "$2" >"$3" && git add "$3" && git commit -qm "$2"); }
+commit_in2 "$T/g1/branches/feature/nest/twigs/a/twigs/b/core" deep deep.txt
+out="$(ent "$T/g1/branches/feature/nest/core" branch merge -y 2>/dev/null)"
+[[ -f "$T/g1/main/core/deep.txt" ]] && pass "grand-twig work reached main" || fail "grand-twig work reached main"
+[[ ! -d "$T/g1/branches/feature/nest" ]] && pass "nested tree removed" || fail "nested tree removed"
+check "$(Norm "$T/g1/main/core")" "$out" "branch merge prints the parent's folder"
+
 step "rm: protect combines env, bare config and .entrc"
 ent "$T/g1" branch feature/keep1 >/dev/null
 ent "$T/g1" branch feature/keep2 >/dev/null
@@ -294,6 +314,16 @@ ent "$E" branch work >/dev/null;   commit_in "$E/branches/work/core" w w.txt
 ent "$E/branches/work/core" twig t >/dev/null
 ent "$E" branch dirty >/dev/null;  echo x >"$E/branches/dirty/core/scratch.txt"
 ent "$E" branch clash >/dev/null;  commit_in "$E/branches/clash/core" mine c.txt
+ent "$E" branch closed >/dev/null; commit_in "$E/branches/closed/core" cl cl.txt
+(cd "$E/branches/closed/core" && git push -q -u origin closed 2>/dev/null)
+git -C "$R" branch -q -D closed                        # PR closed without merging
+ent "$E" branch prot >/dev/null;   commit_in "$E/branches/prot/core" pr pr.txt
+git -C "$E/.bare" config ent.protect prot
+ent "$E" branch withtwig >/dev/null; commit_in "$E/branches/withtwig/core" wt wt.txt
+ent "$E/branches/withtwig/core" twig extra >/dev/null
+commit_in "$E/branches/withtwig/twigs/extra/core" ex ex.txt  # twig work not in main
+git -C "$R" fetch -q "$E/.bare" prot && git -C "$R" merge -q --no-ff -m "merge prot" FETCH_HEAD
+git -C "$R" fetch -q "$E/.bare" withtwig && git -C "$R" merge -q --no-ff -m "merge withtwig" FETCH_HEAD
 # On origin: a merge commit, a squash merge (branch deleted), a cherry-pick, new work
 git -C "$R" fetch -q "$E/.bare" done1 && git -C "$R" merge -q --no-ff -m "merge done1" FETCH_HEAD
 git -C "$R" merge -q --squash sq >/dev/null && git -C "$R" commit -qm "squash sq" && git -C "$R" branch -q -D sq
@@ -309,6 +339,10 @@ has_branch fresh && pass "fresh branch never offered" || fail "fresh branch neve
 has_branch done1 && fail "merge-commit branch removed" || pass "merge-commit branch removed"
 has_branch sq && fail "squash-merged (gone) branch removed" || pass "squash-merged (gone) branch removed"
 has_branch cp && fail "content-merged branch removed" || pass "content-merged branch removed"
+has_branch closed && pass "deleted-on-origin but unmerged branch kept" || fail "deleted-on-origin but unmerged branch kept"
+has_branch prot && pass "protected merged branch kept" || fail "protected merged branch kept"
+has_branch withtwig && has_branch withtwig-extra && pass "branch kept when its twig has unmerged work" || fail "branch kept when its twig has unmerged work"
+echo "$out" | grep -q "twig withtwig-extra has work that is not in main" && pass "unmerged twig reported" || fail "unmerged twig reported"
 [[ ! -d "$E/branches/done1" ]] && pass "merged branch folder removed" || fail "merged branch folder removed"
 
 step "sync: step 2 merges main into branches and twigs"
