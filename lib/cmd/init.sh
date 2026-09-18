@@ -18,7 +18,7 @@ cmd_init() {
   elif [[ "$src" =~ ^[A-Za-z][A-Za-z0-9+.-]*:// || "$src" =~ ^[^/[:space:]]+@[^:]+: || "$src" == *.git ]]; then
     kind=url
   elif [[ "$src" == */* || "$src" == .* ]]; then
-    die "'\$src' is neither a URL nor an existing git repository"
+    die "'$src' is neither a URL nor an existing git repository"
   fi
   local base; base="$(basename "${src%/}")"; base="${base%.git}"
   [[ -n "$dir" ]] || dir="$base"

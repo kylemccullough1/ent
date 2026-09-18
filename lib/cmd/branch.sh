@@ -2,9 +2,9 @@
 
 help_branch() { cat <<'EOF'
 branch <name> [--from <base>]          create a branch at branches/<name>/core
-  Inside feature/x, a bare name like `foo` becomes feature/foo.
-  Cut from the default branch, or from --from <base>.
-  The name must match branchPattern if .entrc sets one.
+  Cut from the branch or twig you are standing in (main from the ent root),
+  or from --from <base>. Its parent is always main.
+  The name is used exactly as given and must match branchPattern if .entrc sets one.
 EOF
 }
 
@@ -17,17 +17,16 @@ check_new_name() {
 
 cmd_branch() {
   ensure_ent
-  local given branch pat base core_dir
-  given="$(arg 1)"
-  [[ -n "$given" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base>]"
-  branch="$(ent_branch_name_for_arg "$given")"
+  local branch pat base core_dir
+  branch="$(arg 1)"
+  [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base>]"
   check_new_name "$branch"
   pat="$(branch_pattern)"
   if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
   if [[ -n "$FROM" ]]; then
     base="$FROM"; has_local "$base" || has_remote "$base" || die "base branch '$base' not found"
   else
-    base="$S_MAIN"
+    base="$(ent_branch_of_cwd 2>/dev/null)" || base="$S_MAIN"
   fi
   has_local "$base" || base="origin/$base"
   core_dir="$ENT/branches/$branch/core"

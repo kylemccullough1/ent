@@ -54,7 +54,7 @@ cmd_rm() {
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "rm <branch> [-r] [-f]"
   [[ "$branch" != "$S_MAIN" ]] || die "cannot remove the default branch '$S_MAIN'"
-  for p in $(cfg protect); do [[ "$branch" != "$p" ]] || die "branch '$branch' is protected"; done
+  for p in $(cfg_all protect); do [[ "$branch" != "$p" ]] || die "branch '$branch' is protected"; done
   has_local "$branch" || die "branch '$branch' not found"
   children_of "$branch"
   if (( ${#REPLY_LIST[@]} )) && (( ! RECURSIVE )); then

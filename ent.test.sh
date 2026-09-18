@@ -33,6 +33,7 @@ check "refs/heads/main" "$(git -C "$T/fresh" symbolic-ref HEAD)" "bare HEAD is m
 check "main" "$(git -C "$T/fresh/main/core" branch --show-current)" "core is on main"
 check "main" "$(git -C "$T/fresh" config ent.main)" "ent.main is main"
 ent "$T" init fresh >/dev/null 2>&1 && fail "init refuses non-empty dir" || pass "init refuses non-empty dir"
+expect_fail "init names the bad source" "'./nope' is neither" ent "$T" init ./nope
 
 step "init from a URL"
 mkdir "$T/src"; (cd "$T/src" && git init -q -b main . && echo hi >README.md && git add . && git commit -qm init \
@@ -62,11 +63,17 @@ ent "$T/g1" branch feature/a >/dev/null
 check "feature/a" "$(git -C "$T/g1/branches/feature/a/core" branch --show-current)" "branch checked out"
 expect_fail "branch duplicate branch" "already exists" ent "$T/g1" branch feature/a
 
-step "branch inherits namespace from current branch"
-cd "$T/g1/branches/feature/a/core"
-ent "$T/g1/branches/feature/a/core" branch 456 >/dev/null
-[[ -d "$T/g1/branches/feature/456/core" ]] && pass "namespace branch container" || fail "namespace branch container"
-check "feature/456" "$(git -C "$T/g1/branches/feature/456/core" branch --show-current)" "namespace branch name"
+step "branch is cut from the branch you stand in, name kept as given"
+ent "$T/g1" branch feature/base >/dev/null
+(cd "$T/g1/branches/feature/base/core" && echo base >base.txt && git add base.txt && git commit -qm base)
+ent "$T/g1/branches/feature/base/core" branch cut >/dev/null
+[[ -d "$T/g1/branches/cut/core" ]] && pass "plain name lands in branches/cut" || fail "plain name lands in branches/cut"
+check "cut" "$(git -C "$T/g1/branches/cut/core" branch --show-current)" "plain name kept as given"
+[[ -f "$T/g1/branches/cut/core/base.txt" ]] && pass "cut from current branch" || fail "cut from current branch"
+check "" "$(git -C "$T/g1/.bare" config --get branch.cut.entParent)" "branch has no ent parent (main)"
+ent "$T/g1/main/core" branch from-main >/dev/null
+[[ ! -f "$T/g1/branches/from-main/core/base.txt" ]] && pass "cut from main when in main" || fail "cut from main when in main"
+ent "$T/g1/branches/feature/a/core" branch feature/456 >/dev/null
 
 step "branch explicit full name from inside namespace"
 cd "$T/g1/branches/feature/a/core"
@@ -229,15 +236,31 @@ step "rm dirty worktree with --force"
 printf 'y\n' | ent "$T/g1" rm feature/dirty --force >/dev/null
 [[ ! -d "$T/g1/branches/feature/dirty" ]] && pass "force rm removed dirty" || fail "force rm failed"
 
-step "branch merge twig into main and removes source"
+step "branch merge: a twig merges into its parent, not main"
 ent "$T/g1/main/core" branch feature/merge >/dev/null
 ent "$T/g1/branches/feature/merge/core" twig sub >/dev/null
 printf 'm' >"$T/g1/branches/feature/merge/twigs/sub/core/m.txt"
 (cd "$T/g1/branches/feature/merge/twigs/sub/core" && git add m.txt && git commit -qm 'm')
 cd "$T/g1/branches/feature/merge/twigs/sub/core"
+expect_fail "branch merge rejects a target" "no target" ent "$T/g1/branches/feature/merge/twigs/sub/core" branch merge main -y
 ent "$T/g1/branches/feature/merge/twigs/sub/core" branch merge -y >/dev/null
-[[ -f "$T/g1/main/core/m.txt" ]] && pass "merge twig into main landed" || fail "merge twig into main landed"
+[[ -f "$T/g1/branches/feature/merge/core/m.txt" ]] && pass "twig merged into parent branch" || fail "twig merged into parent branch"
+[[ ! -f "$T/g1/main/core/m.txt" ]] && pass "twig merge left main alone" || fail "twig merge left main alone"
 [[ ! -d "$T/g1/branches/feature/merge/twigs/sub" ]] && pass "merge finish removed twig" || fail "merge finish removed twig"
+expect_fail "main cannot branch merge" "no parent" ent "$T/g1/main/core" branch merge -y
+
+step "rm: protect combines env, bare config and .entrc"
+ent "$T/g1" branch feature/keep1 >/dev/null
+ent "$T/g1" branch feature/keep2 >/dev/null
+git -C "$T/g1/.bare" config ent.protect feature/keep1
+ENT_PROTECT=feature/keep2 expect_fail "protected by bare config despite env" "protected" ent "$T/g1" rm feature/keep1 -y
+ENT_PROTECT=feature/keep2 expect_fail "protected by env" "protected" ent "$T/g1" rm feature/keep2 -y
+git -C "$T/g1/.bare" config --unset ent.protect
+
+step "commands work through a symlink into the ent"
+ln -s "$T/g1/branches/feature/ok" "$T/link-ok"
+expect_ok "list through symlink" ent "$T/link-ok" list
+check "$(Norm "$T/g1")" "$(ent "$T/link-ok" up)" "up through symlink"
 
 step "branch merge into main cleans up source"
 ent "$T/g1" branch feature/merge-test >/dev/null

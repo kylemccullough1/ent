@@ -1,9 +1,10 @@
 # ent branch merge: merge the current branch into its target, then remove it.
 
 help_merge() { cat <<'EOF'
-branch merge [target] [-y]             merge the current branch, then remove it
-  Run inside the branch's core/ folder. Twigs of the branch are merged into it
-  first. Shows the diff and asks before merging unless -y.
+branch merge [-y]                      merge the current branch into its parent, then remove it
+  A branch merges into main; a twig merges into the branch or twig it grew from.
+  Run inside the core/ folder. The branch's own twigs are merged into it first.
+  Shows the diff and asks before merging unless -y.
   On conflicts: fix them, then `ent branch merge --continue` (or --abort).
 EOF
 }
@@ -54,10 +55,11 @@ cmd_merge() {
   ensure_ent
   if merge_abort_or_continue; then return 0; fi
   local src target child
+  [[ -z "$(arg 2)" ]] || usage_die "branch merge [-y]   (merges into the parent; no target)"
   src="$(ent_branch_of_core)" || die "run from inside a core worktree"
-  target="$(arg 2)"; target="${target:-$S_MAIN}"
-  has_local "$target" || die "no branch '$target'"
-  [[ "$src" != "$target" ]] || die "cannot merge $src into itself"
+  [[ "$src" != "$S_MAIN" ]] || die "$S_MAIN has no parent to merge into"
+  parent_of "$src"; target="${REPLY:-$S_MAIN}"
+  has_local "$target" || die "parent branch '$target' no longer exists"
 
   children_of "$src"
   if (( ${#REPLY_LIST[@]} )); then

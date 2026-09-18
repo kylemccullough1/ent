@@ -23,8 +23,9 @@ ent_norm() {
 ent_abs_path() { (cd "$1" && { pwd -W 2>/dev/null || pwd -P; }); }
 
 # ent_root: walk up from the current folder to the one that holds .bare.
+# Starts from the real path (pwd -P), so a symlink pointing into an ent still works.
 ent_root() {
-  local d="$PWD"
+  local d; d="$(pwd -P)"
   while [[ -n "$d" && "$d" != "/" ]]; do
     if [[ -d "$d/.bare" ]]; then ent_norm "$d"; return 0; fi
     d="${d%/*}"
@@ -102,11 +103,3 @@ ent_branch_of_cwd() { _branch_at_cwd /core; }
 # ent_branch_of_core: branch whose core/ checkout holds the current directory.
 # Commands that act on checked-out files (branch merge) require this.
 ent_branch_of_core() { _branch_at_cwd ""; }
-
-# ent_branch_name_for_arg <arg>: inside feature/x, `branch foo` means feature/foo.
-ent_branch_name_for_arg() {
-  local arg="$1" cur
-  cur="$(ent_branch_of_cwd 2>/dev/null || true)"
-  [[ -n "$cur" && "$cur" != "$(ent_main)" && "$arg" != */* ]] || { printf '%s' "$arg"; return; }
-  if [[ "$cur" == */* ]]; then printf '%s/%s' "${cur%/*}" "$arg"; else printf '%s' "$arg"; fi
-}
