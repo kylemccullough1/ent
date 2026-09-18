@@ -127,8 +127,6 @@ ent "$T/g1" branch feature/ok >/dev/null
 step "path resolution (library) from inside an ent"
 cd "$T/g1/main/core"
 source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
-# lib/paths.sh enables set -e; restore the test harness's tolerant mode.
-set +e
 ENT="$(Norm "$T/g1")"
 check "$(Norm "$T/g1/main/core")" "$(ent_core main)" "ent_core main"
 check "$(Norm "$T/g1/branches/feature/a/core")" "$(ent_core feature/a)" "ent_core feature/a"
@@ -271,23 +269,55 @@ printf 'y\ny\n' | ent "$T/g1/branches/feature/merge-test/core" branch merge >/de
 [[ -f "$T/g1/main/core/hello.txt" ]] && pass "merge into main landed" || fail "merge into main landed"
 [[ ! -d "$T/g1/branches/feature/merge-test" ]] && pass "merge finish removed worktree" || fail "merge finish removed worktree"
 
-step "sync pulls main"
-mkdir "$T/remote" && (cd "$T/remote" && git init -q -b main . && echo a >a.txt && git add . && git commit -qm init)
+step "sync: setup (origin R, ent E with one branch per case)"
+R="$T/syncR"
+mkdir "$R" && (cd "$R" && git init -q -b main . && echo a >a.txt && echo c >c.txt && git add . && git commit -qm init)
 cd "$T"
-"$BASH" "$G" init "$T/remote" syncent >/dev/null
-echo b >"$T/remote/b.txt" && (cd "$T/remote" && git add . && git commit -qm second)
-ent "$T/syncent/main/core" sync -y >/dev/null
-[[ -f "$T/syncent/main/core/b.txt" ]] && pass "sync pulled" || fail "sync pull"
+"$BASH" "$G" init "$R" syncE >/dev/null 2>&1
+E="$T/syncE"
+commit_in() { (cd "$1" && echo "$2" >"$3" && git add "$3" && git commit -qm "$2"); }
+ent "$E" branch fresh >/dev/null                       # no commits: must never be offered
+ent "$E" branch done1 >/dev/null;  commit_in "$E/branches/done1/core" d1 d1.txt
+ent "$E" branch sq >/dev/null;     commit_in "$E/branches/sq/core" sq sq.txt
+(cd "$E/branches/sq/core" && git push -q -u origin sq 2>/dev/null)
+ent "$E" branch cp >/dev/null;     commit_in "$E/branches/cp/core" cp cp.txt
+ent "$E" branch work >/dev/null;   commit_in "$E/branches/work/core" w w.txt
+ent "$E/branches/work/core" twig t >/dev/null
+ent "$E" branch dirty >/dev/null;  echo x >"$E/branches/dirty/core/scratch.txt"
+ent "$E" branch clash >/dev/null;  commit_in "$E/branches/clash/core" mine c.txt
+# On origin: a merge commit, a squash merge (branch deleted), a cherry-pick, new work
+git -C "$R" fetch -q "$E/.bare" done1 && git -C "$R" merge -q --no-ff -m "merge done1" FETCH_HEAD
+git -C "$R" merge -q --squash sq >/dev/null && git -C "$R" commit -qm "squash sq" && git -C "$R" branch -q -D sq
+git -C "$R" fetch -q "$E/.bare" cp && git -C "$R" cherry-pick FETCH_HEAD >/dev/null
+commit_in "$R" new n.txt
+commit_in "$R" theirs c.txt
 
-step "sync merges main into all worktrees"
-mkdir "$T/sync2" && (cd "$T/sync2" && git init -q -b main . && echo a >a.txt && git add . && git commit -qm init)
-cd "$T"
-"$BASH" "$G" init "$T/sync2" syncent2 >/dev/null
-ent "$T/syncent2" branch sync-branch >/dev/null
-echo b >"$T/sync2/b.txt" && (cd "$T/sync2" && git add . && git commit -qm second)
-ent "$T/syncent2/main/core" sync >/dev/null
-[[ -f "$T/syncent2/main/core/b.txt" ]] && pass "sync updated main" || fail "sync updated main"
-[[ -f "$T/syncent2/branches/sync-branch/core/b.txt" ]] && pass "sync merged main into branch" || fail "sync merged main into branch"
+step "sync: step 1 pulls main and removes only merged branches"
+out="$(ent "$E" sync -y 2>&1)"
+[[ -f "$E/main/core/n.txt" ]] && pass "sync fast-forwarded main" || fail "sync fast-forwarded main"
+has_branch() { git -C "$E/.bare" show-ref -q --verify "refs/heads/$1"; }
+has_branch fresh && pass "fresh branch never offered" || fail "fresh branch never offered"
+has_branch done1 && fail "merge-commit branch removed" || pass "merge-commit branch removed"
+has_branch sq && fail "squash-merged (gone) branch removed" || pass "squash-merged (gone) branch removed"
+has_branch cp && fail "content-merged branch removed" || pass "content-merged branch removed"
+[[ ! -d "$E/branches/done1" ]] && pass "merged branch folder removed" || fail "merged branch folder removed"
+
+step "sync: step 2 merges main into branches and twigs"
+[[ -f "$E/branches/work/core/n.txt" && -f "$E/branches/work/core/w.txt" ]] && pass "main merged into branch with its own work" || fail "main merged into branch with its own work"
+[[ -f "$E/branches/work/twigs/t/core/n.txt" ]] && pass "main merged into twig" || fail "main merged into twig"
+[[ -f "$E/branches/fresh/core/n.txt" ]] && pass "main merged into fresh branch" || fail "main merged into fresh branch"
+[[ ! -f "$E/branches/dirty/core/n.txt" ]] && pass "dirty worktree skipped" || fail "dirty worktree skipped"
+echo "$out" | grep -q "dirty (uncommitted changes)" && pass "skip reported" || fail "skip reported"
+[[ -f "$(git -C "$E/branches/clash/core" rev-parse --git-path MERGE_HEAD)" ]] && pass "conflict left mid-merge" || fail "conflict left mid-merge"
+echo "$out" | grep -q "clash" && echo "$out" | grep -q "conflicts to resolve" && pass "conflict reported" || fail "conflict reported"
+
+step "sync <branch> merges main into just that branch"
+git -C "$E/branches/clash/core" merge --abort
+commit_in "$R" newer n2.txt
+ent "$E" sync fresh -y >/dev/null 2>&1
+[[ -f "$E/branches/fresh/core/n2.txt" ]] && pass "named branch synced" || fail "named branch synced"
+[[ ! -f "$E/branches/work/core/n2.txt" ]] && pass "other branches untouched" || fail "other branches untouched"
+expect_fail "sync unknown branch" "not found" ent "$E" sync nope
 
 step "destroy"
 cd "$T"
