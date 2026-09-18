@@ -57,6 +57,17 @@ cmd_go() {
   die "no branch matches '$name'"
 }
 
+# cmd_where (internal, used by the prompt helpers): the branch that owns the current
+# folder, or "ent" at the ent root. Prints nothing and succeeds anywhere else.
+cmd_where() {
+  ENT="$(ent_root 2>/dev/null)" || return 0
+  load_state
+  if ! ent_branch_of_cwd 2>/dev/null; then
+    [[ "$(ent_norm "$PWD")" == "$ENT" ]] && echo ent
+  fi
+  return 0
+}
+
 cmd_path() {
   ensure_ent
   local branch p

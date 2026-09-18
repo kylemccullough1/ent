@@ -31,8 +31,9 @@ case ":$PATH:" in *":$BIN:"*) ;; *)
 
 cat <<MSG
 
-For tab completion and the \`ent\` command that cds into worktrees, add to ~/.bashrc:
-  source "$SHARE/completions/ent.bash"
+For tab completion and the \`ent\` command that cds into worktrees, add one line:
+  bash, in ~/.bashrc:   source "$SHARE/completions/ent.bash"
+  zsh, in ~/.zshrc:     source "$SHARE/completions/ent.zsh"     (after compinit)
 
 Then: ent help
 MSG

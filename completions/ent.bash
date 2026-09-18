@@ -52,53 +52,38 @@ ent() {
   esac
 }
 
-# Prompt helper: prints the current ent branch if cwd is inside an ent container,
-# or "ent" if cwd is the ent root. Returns empty everywhere else.
-# Use in PS1 like:
-#   PS1='[\u@\h \W$(__ent_ps1 " (%s)")]\$ '
-__ENT_SHARE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-__ent_ps1() {
-  local fmt="${1:-%s}" branch root pwd_w
-  branch="$(
-    bash -c 'source "$1" >/dev/null 2>&1; ent_branch_of_cwd 2>/dev/null' \
-      _ "$__ENT_SHARE/lib/paths.sh"
-  )"
-  if [[ -z "$branch" ]]; then
-    root="$(
-      bash -c 'source "$1" >/dev/null 2>&1; ent_root 2>/dev/null' \
-        _ "$__ENT_SHARE/lib/paths.sh"
-    )"
-    pwd_w="$(pwd -W 2>/dev/null || pwd -P)"
-    if [[ -n "$root" && "$(cygpath -ml "$pwd_w" 2>/dev/null || echo "$pwd_w")" == "$root" ]]; then
-      branch="ent"
-    fi
-  fi
-  [[ -n "$branch" ]] && printf "$fmt" "$branch"
+# ---------- prompt ----------
+# __ent_in_ent: true when an ent's .bare folder sits above the current folder.
+# Uses only shell builtins (no processes), so prompts outside an ent cost nothing.
+__ent_in_ent() {
+  local d="$PWD"
+  while [[ -n "$d" ]]; do [[ -d "$d/.bare" ]] && return 0; d="${d%/*}"; done
+  return 1
 }
 
-# If git's __git_ps1 prompt helper is loaded, make it ent-aware so that
-# ent container directories show the resolved ent branch instead of the bare
-# repo's HEAD. Inside an actual core/ worktree the real git prompt is used so
-# dirty-state markers still appear. Outside an ent, the original helper is used.
-if declare -f __git_ps1 >/dev/null 2>&1; then
+# __ent_ps1 [format]: the ent branch that owns the current folder ("ent" at the
+# ent root), printed through format (default "%s"). Prints nothing outside an ent.
+#   PS1='[\u@\h \W$(__ent_ps1 " (%s)")]\$ '
+__ent_ps1() {
+  __ent_in_ent || return 0
+  local b; b="$(git ent __where 2>/dev/null)"
+  [[ -n "$b" ]] && printf -- "${1:-%s}" "$b"
+  return 0
+}
+
+# If git's __git_ps1 prompt is loaded, make it ent-aware. An ent container folder
+# (branches/x/, twigs/) is not a git checkout, so plain __git_ps1 would show the bare
+# repo's HEAD there. Inside a real core/ checkout the original runs, keeping git's
+# dirty markers; outside an ent the original runs untouched.
+# The __ent_git_ps1 check stops a second `source` from wrapping the wrapper.
+if declare -f __git_ps1 >/dev/null 2>&1 && ! declare -f __ent_git_ps1 >/dev/null 2>&1; then
   eval "$(declare -f __git_ps1 | sed 's/^__git_ps1/__ent_git_ps1/')"
   __git_ps1() {
-    local top ent_branch fmt
-    top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-    top="${top##*/}"
-    # Inside an actual core/ worktree, keep git's dirty-state prompt.
-    if [[ "$top" == "core" ]]; then
-      __ent_git_ps1 "$@"
-      return
-    fi
-    ent_branch="$(__ent_ps1 '%s')"
-    if [[ -n "$ent_branch" ]]; then
-      fmt="${1:- (%s)}"
-      printf "$fmt" "$ent_branch"
-    else
-      __ent_git_ps1 "$@"
-    fi
+    __ent_in_ent || { __ent_git_ps1 "$@"; return; }
+    local top; top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ "${top##*/}" == core ]]; then __ent_git_ps1 "$@"; return; fi
+    __ent_ps1 "${1:- (%s)}"
   }
 fi
 
-# Make sure git completion/prompt is loaded before this point in ~/.bashrc.
+# Load git's completion and prompt before sourcing this file in ~/.bashrc.

@@ -201,6 +201,15 @@ expect_fail "go missing name" "usage" ent "$T/g1" go
 expect_fail "go extra args" "usage" ent "$T/g1" go feature/456 extra
 expect_fail "go unknown branch" "no branch matches" ent "$T/g1" go nope
 
+step "prompt helper verb (__where)"
+check "feature/456" "$(ent "$T/g1/branches/feature/456/twigs" __where)" "__where in a twigs folder"
+check "ent" "$(ent "$T/g1" __where)" "__where at the ent root"
+check "" "$(ent "$T" __where)" "__where outside an ent prints nothing"
+
+step "git-ent works through a symlink"
+mkdir -p "$T/linkbin" && ln -s "$G" "$T/linkbin/git-ent"
+check "$(Norm "$T/g1/branches/feature/456/core")" "$(cd "$T/g1" && "$BASH" "$T/linkbin/git-ent" go feature/456)" "symlinked git-ent finds lib/"
+
 step "rm refuses to remove a branch that has twigs"
 ent "$T/g1" rm feature/a >/dev/null 2>&1 && fail "rm feature/a without recursive" || pass "rm refuses twigs"
 

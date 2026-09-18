@@ -14,7 +14,15 @@ set -euo pipefail
 VERSION=0.4.0
 
 # The library sits next to this script in a checkout, or in the install location.
-ENT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib"
+# Follow symlinks first, so `ln -s ~/src/ent/git-ent ~/bin/` finds ~/src/ent/lib.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+  _dir="$(cd "$(dirname "$_self")" && pwd)"
+  _self="$(readlink "$_self")"
+  [[ "$_self" == /* ]] || _self="$_dir/$_self"
+done
+ENT_LIB="$(cd "$(dirname "$_self")" && pwd)/lib"
+unset _self _dir
 [[ -d "$ENT_LIB" ]] || ENT_LIB="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent/lib"
 for _f in core config state paths; do source "$ENT_LIB/$_f.sh"; done
 for _f in "$ENT_LIB"/cmd/*.sh; do source "$_f"; done
@@ -54,6 +62,7 @@ main() {
   case "$verb" in
     help)    cmd_help "$(arg 1)" ;;
     init|branch|merge|twig|list|go|up|down|path|sync|rm|destroy) "cmd_$verb" ;;
+    __where) cmd_where ;;   # internal: used by the shell prompt helpers
     *)       die "unknown verb: $verb" ;;
   esac
 }
