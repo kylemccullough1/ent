@@ -11,12 +11,13 @@ declare -g -A ENT_WT_BRANCH
 # ---------- normalization ----------
 
 # ent_norm <path>: print a canonical windows/mixed path (C:/...) if cygpath is available,
-# else the path unchanged. Use long-name form (-ml) so comparisons with git's output are stable.
+# else the physical path (symlinks resolved, as git reports worktree paths) when it exists.
+# Use long-name form (-ml) so comparisons with git's output are stable.
 ent_norm() {
   if command -v cygpath >/dev/null 2>&1; then
     cygpath -ml "$1"
   else
-    printf '%s' "$1"
+    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
   fi
 }
 
