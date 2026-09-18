@@ -317,7 +317,7 @@ step "sync: step 2 merges main into branches and twigs"
 [[ -f "$E/branches/fresh/core/n.txt" ]] && pass "main merged into fresh branch" || fail "main merged into fresh branch"
 [[ ! -f "$E/branches/dirty/core/n.txt" ]] && pass "dirty worktree skipped" || fail "dirty worktree skipped"
 echo "$out" | grep -q "dirty (uncommitted changes)" && pass "skip reported" || fail "skip reported"
-[[ -f "$(git -C "$E/branches/clash/core" rev-parse --git-path MERGE_HEAD)" ]] && pass "conflict left mid-merge" || fail "conflict left mid-merge"
+git -C "$E/branches/clash/core" rev-parse -q --verify MERGE_HEAD >/dev/null && pass "conflict left mid-merge" || fail "conflict left mid-merge"
 echo "$out" | grep -q "clash" && echo "$out" | grep -q "conflicts to resolve" && pass "conflict reported" || fail "conflict reported"
 
 step "sync <branch> merges main into just that branch"

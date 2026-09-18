@@ -9,8 +9,8 @@ branch merge [-y]                      merge the current branch into its parent,
 EOF
 }
 
-# merge_head_of <worktree>: path of MERGE_HEAD, which exists while a merge is unfinished.
-merge_head_of() { git -C "$1" rev-parse --path-format=absolute --git-path MERGE_HEAD 2>/dev/null; }
+# mid_merge <worktree>: true while a merge there is unfinished (MERGE_HEAD exists).
+mid_merge() { git -C "$1" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; }
 
 worktree_dirty() { [[ -n "$(git -C "$1" status --porcelain 2>/dev/null)" ]]; }
 
@@ -22,7 +22,7 @@ do_merge() {
   has_local "$tgt" || die "no branch '$tgt'"
   wt_path_of "$tgt" || die "$tgt has no worktree to merge into"
   tp="$REPLY"
-  if [[ -f "$(merge_head_of "$tp")" ]]; then die "$tgt is already mid-merge. Use branch merge --abort or --continue from $tp"; fi
+  if mid_merge "$tp"; then die "$tgt is already mid-merge. Use branch merge --abort or --continue from $tp"; fi
   if worktree_dirty "$tp"; then die "$tgt has uncommitted changes in $tp"; fi
   if git -C "$ENT" merge-base --is-ancestor "$src" "$tgt"; then note "$tgt already contains $src"; return 0; fi
   note "Changes $src would bring into $tgt:"
@@ -30,7 +30,7 @@ do_merge() {
   confirm "Merge $src into $tgt?" || return 1
   if (( DRY_RUN )); then note "(dry run: not merged)"; return 0; fi
   if run git -C "$tp" merge --no-edit "$src"; then note "Merged $src into $tgt."; return 0; fi
-  if [[ -f "$(merge_head_of "$tp")" ]]; then
+  if mid_merge "$tp"; then
     warn "conflicts merging $src into $tgt"
     git -C "$tp" diff --name-only --diff-filter=U >&2
     note "Resolve in $tp, then: ent branch merge --continue (or --abort)"
@@ -45,7 +45,7 @@ merge_abort_or_continue() {
   local top
   top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
   [[ -n "$top" ]] || die "run from inside the worktree that is mid-merge"
-  [[ -f "$(merge_head_of "$top")" ]] || die "no merge in progress in $top"
+  mid_merge "$top" || die "no merge in progress in $top"
   if (( MERGE_ABORT )); then run git -C "$top" merge --abort
   else run env GIT_EDITOR=true git -C "$top" merge --continue; fi
   return 0

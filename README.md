@@ -1,122 +1,145 @@
 # git-ent
 
-One bash file that turns a repo into an **ent**: a bare git database plus a
-nested container layout, so switching branches is `cd`, not `checkout`. Side
-experiments become **twigs** — worktrees that remember which branch they grew
-from — and `list` draws the whole thing as a tree.
+A thin bash wrapper around git that gives every branch its own folder, so
+switching branches is `cd`, not `checkout`. Side experiments become **twigs**,
+branches nested under the branch they grew from.
 
 ```
-personal/
-  .bare/                      the git database
-  .git                        one line: "gitdir: ./.bare"
-  .entrc                      team settings (committed on the default branch)
+my-app/
+  .bare/                          the git database (a bare repo)
+  .git                            one line: "gitdir: ./.bare"
   main/
-    core/                     worktree for main
-    twigs/
-      auth/
-        core/                 worktree for main-auth
-        twigs/
-          jwt/
-            core/             worktree for main-auth-jwt
+    core/                         main checked out here
   branches/
-    feature-x/
-      core/                   worktree for feature/x
-      twigs/
-        db/
-          core/               worktree for feature/x-db
+    feature/
+      x/
+        core/                     branch feature/x
+        twigs/
+          db/
+            core/                 twig feature/x-db (parent: feature/x)
 ```
 
-Every container holds `core/` (the actual worktree) and `twigs/` (its
-children). Nothing is ever checked out inside another worktree, so there is no
-ignore pattern to maintain and no risk of nested build tools walking into
-children.
+Every branch folder is a **container** holding `core/` (the checkout) and
+`twigs/` (its children). Nothing is checked out inside another checkout, so build
+tools never wander into a neighbour.
 
-Requirements: bash 4+, git 2.42+ (for `worktree add --orphan`). Linux, macOS,
-Git Bash on Windows.
+**Requirements:** bash 3.2+ and git 2.20+, which is already what you have with
+macOS, any Linux, and Git for Windows (Git Bash). Tested on Apple's bash 3.2
+with git 2.39, and on bash 5.3 with git 2.55. Recognizing squash merges by
+content during `sync` needs git 2.38+; older git skips just that check.
 
 ## Install
 
 ```bash
-git clone <this repo> && cd <repo>
-./install.sh                 # copies git-ent to ~/.local/bin and prints what to source
+git clone https://github.com/kylemccullough1/ent.git && cd ent
+./install.sh          # copies git-ent into ~/.local/share/git-ent, launcher in ~/.local/bin
 ```
 
-`install.sh` prints one line for `~/.bashrc`: the `source` for tab completion
-and the `ent` wrapper. After that `git ent` works everywhere, and `ent branch`
-and `ent twig` will also `cd` into the new worktree for you.
+Then add the line install.sh prints to your shell's startup file:
+
+```bash
+source ~/.local/share/git-ent/completions/ent.bash   # ~/.bashrc
+source ~/.local/share/git-ent/completions/ent.zsh    # ~/.zshrc, after compinit
+```
+
+That gives you the `ent` command (which `cd`s into the folders it creates or
+finds), tab completion, and the prompt helper. `git ent ...` works without it.
 
 ## Use
 
 ```bash
-ent init my-app                    # new repo -> my-app/.bare, my-app/main/core/
+ent init my-app                    # new repo: my-app/.bare, my-app/main/core
 ent init git@host:org/repo.git     # from a remote
 ent init ../old-clone new-ent      # from an existing clone (left untouched)
 
-ent branch feature/x               # new top-level branch
-ent twig auth                      # from inside feature/x/core: branch feature/x-auth
-ent branch merge -y                # merge current branch into its parent and finish
-ent up                             # cd to parent
-ent down auth                      # cd into a twig
-ent go feature/x                   # cd to a named branch or twig
-ent list                           # everything, twigs nested under their parents
-ent rm feature/x-auth              # remove a branch (confirms)
-ent rm feature/x-auth -f           # remove without prompting
-ent sync                           # fetch all; merge main into worktrees
+ent branch feature/x               # branches/feature/x/core, cut from where you stand
+ent twig db                        # inside feature/x: twig feature/x-db
+ent up / ent down db / ent go feature/x
+ent list                           # the whole tree
+ent branch merge                   # merge into the parent, then remove the branch
+ent sync                           # update main from origin, merge main into your work
+ent rm feature/x -r                # remove a branch and its twigs (asks first)
+ent help [verb]                    # every verb and flag
 ```
 
-`git ent help` prints the cheat sheet.
+## How branches relate
 
-## Concepts, briefly
+- A **branch** always has **main** as its parent. `ent branch <name>` cuts it from
+  the branch or twig you are standing in (main when you are at the ent root), or
+  from `--from <base>`. The name is used exactly as typed.
+- A **twig**'s parent is the branch or twig it was made from, recorded in
+  `.bare/config` as `branch.<twig>.entParent`. That record is local and never pushed.
+- `ent branch merge` merges into the parent: a branch into main, a twig into its
+  parent. The branch's own twigs are merged into it first, then it is removed.
+- `ent sync`:
+  1. With an `origin`: fetch, fast-forward main, then for each branch this pull
+     merged (merge commit, squash, or rebase), ask whether to delete it.
+     Branches that were already in main before the pull, such as brand-new ones,
+     are never offered.
+  2. Merge main into every branch and twig, or `ent sync <branch>` for one.
+     Folders with uncommitted changes are skipped; conflicts are left in place
+     and listed.
 
-- **Branch** — a top-level worktree under `<ent>/branches/<slug>/core/`.
-- **Twig** — a child worktree that records a parent branch in
-  `git config branch.<b>.entParent`. Its folder is
-  `<parent-container>/twigs/<name>/core/`. Twig names are stable: a twig of
-  `feature/x` called `auth` becomes branch `feature/x-auth`.
-- **Parentage is local.** Worktree registrations and `branch.*` config live in
-  `.bare/` and are never pushed.
+## Settings: `.entrc` (optional)
 
-## Team settings: `.entrc`
-
-Commit a `.entrc` on the default branch to share rules. Copy `.entrc.example`
-to start. Keys:
+Commit a `.entrc` on your repo's default branch to share rules with everyone
+who uses ent on it. `.entrc.example` shows the format. Keys:
 
 | Key | Effect |
 |---|---|
-| `branchPattern` | ERE that branch names must match. Empty/absent = no rule. Never applied to twigs. |
-| `maxDepth` | Maximum nesting depth for twigs (default 2). |
-| `protect` | Extra branch names `rm` refuses, space-separated. |
+| `branchPattern` | Regular expression every new branch name must match. Twigs are exempt. |
+| `maxDepth` | How deep twigs may nest (default 2). |
+| `protect` | Branch names `ent rm` refuses, space-separated. |
 
-Precedence: `ENT_<KEY>` env → `ent.<key>` in `.bare/config` → `.entrc` →
-built-in. `protect` is a union of every layer.
-
-## Shell prompt
-
-Because only `core/` directories are real git worktrees, a plain git prompt
-shows the bare repo's default branch (`main`) when you are in an ent container.
-
-If you already use Git Bash / git-prompt.sh, just source the ent completion
-file after git-prompt in your `~/.bashrc`:
+For a rule only on your machine, put it in the bare repo's config instead; it is
+never pushed:
 
 ```bash
-source "$SHARE/completions/ent.bash"
+git config ent.branchPattern '^(feature|defect)/'
 ```
 
-Ent automatically makes `__git_ps1` container-aware, so `branches/logic/`
-will display `(logic)`.
+Order: `ENT_<KEY>` environment variable, then `ent.<key>` in `.bare/config`, then
+`.entrc`. `protect` combines all three.
 
-For custom prompts, the underlying helper is also available:
+## Prompt
+
+A container folder such as `branches/feature/x/` is not a git checkout, so a
+normal git prompt shows the wrong branch there. After sourcing the completion
+file:
+
+- **bash:** if git's `__git_ps1` is loaded, it becomes ent-aware automatically.
+- **either shell:** `__ent_ps1 " (%s)"` prints the ent branch for the current
+  folder, `ent` at the root, and nothing outside an ent.
 
 ```bash
-PS1='[\u@\h \W$(__ent_ps1 ":%s")]\$ '
+PS1='[\u@\h \W$(__ent_ps1 " (%s)")]\$ '               # bash
+setopt PROMPT_SUBST; PROMPT='%~$(__ent_ps1 " (%s)") %# '   # zsh
 ```
 
-`__ent_ps1` prints the resolved ent branch (or nothing when cwd is outside
-an ent), so it composes safely with any existing prompt.
+Outside an ent the helper runs no programs at all, so it never slows your prompt.
 
-## Developing ent itself
+## How the code is laid out
 
-- Tests: `bash ent.test.sh`. It builds throwaway ents under a temp directory.
-- Re-run `./install.sh` after editing `git-ent`, `lib/paths.sh`, `cheatsheet.md`,
-  or `completions/ent.bash`.
-- This repo is itself an ent; the default branch worktree is `main/core/`.
+| File | Job |
+|---|---|
+| `git-ent` | Finds `lib/`, loads it, and dispatches the verb. |
+| `lib/core.sh` | Output (`say`, `note`, `warn`, `die`), `run`, `confirm`, flag parsing. |
+| `lib/state.sh` | Reads git's state once (3 git calls) into arrays; all lookups use them. |
+| `lib/paths.sh` | Where things live: `ent_root`, `ent_container`, which branch owns a folder. |
+| `lib/config.sh` | Settings layers and `.entrc`. |
+| `lib/cmd/<verb>.sh` | One verb each, with its `help_<verb>` text. |
+| `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper. |
+
+Two conventions run through the code:
+
+- **stdout carries only a path** for the `ent` wrapper to `cd` into; every
+  message goes to stderr.
+- **Lookups set `REPLY`** instead of printing (`parent_of b; echo "$REPLY"`),
+  which avoids starting a subshell. On Git Bash for Windows each subshell is a
+  full process start.
+
+## Developing
+
+- `bash ent.test.sh` builds throwaway ents in a temp folder and runs every verb.
+  Run it under both `/bin/bash` (3.2) and a modern bash before pushing.
+- Re-run `./install.sh` after editing to update your installed copy.

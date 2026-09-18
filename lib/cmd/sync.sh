@@ -65,17 +65,17 @@ merged_reason() {
   if git -C "$ENT" merge-base --is-ancestor "$b" "$new"; then echo "merged into $S_MAIN"; return 0; fi
   track="$(git -C "$ENT" for-each-ref --format='%(upstream:track)' "refs/heads/$b")"
   if [[ "$track" == "[gone]" ]]; then echo "its branch on origin was deleted (squash or rebase merge)"; return 0; fi
-  if changes_in "$b" "$new" && ! changes_in "$b" "$old"; then echo "its changes are already in $S_MAIN"; return 0; fi
+  if content_already_in "$new" "$b" && ! content_already_in "$old" "$b"; then echo "its changes are already in $S_MAIN"; return 0; fi
   return 1
 }
 
-# changes_in <branch> <commit>: true when merging <branch> into <commit> would change
+# content_already_in <commit> <branch>: true when merging <branch> into <commit> would change
 # nothing, i.e. its content is already there. Needs git 2.38+ (merge-tree --write-tree);
 # on older git this check is skipped.
-changes_in() {
+content_already_in() {
   local tree
-  tree="$(git -C "$ENT" merge-tree --write-tree "$2" "$1" 2>/dev/null | head -n 1)" || return 1
-  [[ -n "$tree" && "$tree" == "$(git -C "$ENT" rev-parse "$2^{tree}")" ]]
+  tree="$(git -C "$ENT" merge-tree --write-tree "$1" "$2" 2>/dev/null | head -n 1)" || return 1
+  [[ -n "$tree" && "$tree" == "$(git -C "$ENT" rev-parse "$1^{tree}")" ]]
 }
 
 # offer_removal <branch> <reason>: ask, then remove the branch, its twigs, and their folders.
@@ -109,11 +109,11 @@ sync_worktrees() {
     [[ "$b" != "$S_MAIN" ]] || continue
     if ! wt_path_of "$b"; then [[ -z "$only" ]] || skipped+=("$b (no worktree)"); continue; fi
     p="$REPLY"
-    if [[ -f "$(merge_head_of "$p")" ]]; then skipped+=("$b (already mid-merge)"); continue; fi
+    if mid_merge "$p"; then skipped+=("$b (already mid-merge)"); continue; fi
     if worktree_dirty "$p"; then skipped+=("$b (uncommitted changes)"); continue; fi
     if git -C "$ENT" merge-base --is-ancestor "$S_MAIN" "$b"; then current+=("$b"); continue; fi
     if run git -C "$p" merge --no-edit "$S_MAIN"; then merged+=("$b")
-    elif [[ -f "$(merge_head_of "$p")" ]]; then conflicts+=("$b  ($p)")
+    elif mid_merge "$p"; then conflicts+=("$b  ($p)")
     else skipped+=("$b (git merge failed)"); fi
   done
 
