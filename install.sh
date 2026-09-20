@@ -1,11 +1,30 @@
 #!/usr/bin/env bash
-# Install git-ent for the current user. Usage: ./install.sh [bin-dir]
+# Install git-ent for the current user.
+# Usage: ./install.sh [bin-dir] [--rc <file>]... [--no-rc]
 #   git-ent, lib/, completions/, uninstall.sh  ->  ~/.local/share/git-ent/
-#   a small git-ent launcher     ->  ~/.local/bin/git-ent (or [bin-dir])
+#   a small git-ent launcher                   ->  ~/.local/bin/git-ent (or [bin-dir])
+#   one `source` line                          ->  your shell's startup file(s)
 # Copies, not symlinks: re-run after editing.
+#
+#   --rc <file>   set up this file instead of the ones found automatically (repeatable).
+#                 ENT_RC=<file> does the same.
+#   --no-rc       don't touch any startup file. ENT_NO_RC=1 does the same.
 set -euo pipefail
+
+BIN="" NO_RC="${ENT_NO_RC:-}" RC_FILES=()
+while (( $# > 0 )); do
+  case "$1" in
+    --rc)     RC_FILES+=("${2:?--rc needs a file}"); shift ;;
+    --no-rc)  NO_RC=1 ;;
+    -*)       echo "unknown option: $1" >&2; exit 1 ;;
+    *)        BIN="$1" ;;
+  esac
+  shift
+done
+[[ -z "${ENT_RC:-}" ]] || RC_FILES+=("$ENT_RC")
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${1:-$HOME/.local/bin}"
+BIN="${BIN:-$HOME/.local/bin}"
 SHARE="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent"
 
 rm -rf "$SHARE"
@@ -31,40 +50,82 @@ case ":$PATH:" in *":$BIN:"*) ;; *)
 
 # ---------- shell setup ----------
 # The `ent` command (which cds for you), tab completion and the prompt helper come
-# from one `source` line in your shell's startup file.
+# from one `source` line. completions/ent.sh picks the zsh or bash version itself,
+# so every startup file gets the same line.
+#
+# The line says $HOME literally rather than /Users/you, so a startup file shared
+# between machines keeps working.
+RC_SHARE="${SHARE/#$HOME/\$HOME}"
+RC_LINE="source \"$RC_SHARE/completions/ent.sh\""
+RC_RECORD="$SHARE/rc-files"     # what uninstall.sh should clean up
+CHANGED=()
 
-# add_to_rc <rc-file> <line>: make sure <line> is in <rc-file>, exactly once.
+# add_to_rc <rc-file>: make sure RC_LINE is in <rc-file>, exactly once.
 #   - install.sh is re-run after every update, so running it again must not
 #     add a second copy.
 #   - The file may not exist yet (a fresh machine has no ~/.bashrc).
-#   - Leave a comment above the line so a person reading their rc file later
+#   - Leave a comment above the line so a person reading their startup file later
 #     knows where it came from.
-#   Print what happened (added / already there) so the user sees it.
 #   The check matches the text anywhere in the file, not only whole lines, so a line
 #   you commented out ("# source ...") counts as present and stays switched off.
 add_to_rc() {
-  local rc="$1" line="$2"
-  if [[ -f "$rc" ]] && grep -qF -- "$line" "$rc"; then
-    echo "$rc already sources ent; left unchanged."
+  local rc="$1"
+  printf '%s\n' "$rc" >> "$RC_RECORD"
+  if [[ -f "$rc" ]] && grep -qF -- "$RC_LINE" "$rc"; then
+    echo "  $rc (already set up)"
     return 0
   fi
+  mkdir -p "$(dirname "$rc")"
   printf '\n# git-ent: the `ent` command, tab completion and prompt helper (added by install.sh)\n%s\n' \
-    "$line" >> "$rc"
-  echo "Added to $rc: $line"
+    "$RC_LINE" >> "$rc"
+  CHANGED+=("$rc")
+  echo "  $rc"
 }
 
-# Pick the startup file for the shell you log in with. ENT_NO_RC=1 skips this step.
-# The line says $HOME literally rather than /Users/you, so an rc file shared between
-# machines keeps working.
-if [[ -z "${ENT_NO_RC:-}" ]]; then
-  RC_SHARE="${SHARE/#$HOME/\$HOME}"
-  case "${SHELL##*/}" in
-    zsh)  add_to_rc "$HOME/.zshrc"  "source \"$RC_SHARE/completions/ent.zsh\"" ;;
-    bash) add_to_rc "$HOME/.bashrc" "source \"$RC_SHARE/completions/ent.bash\"" ;;
-    *)    echo "Add to your shell's startup file: source \"$RC_SHARE/completions/ent.bash\"" ;;
-  esac
+# loads_bashrc <file>: true when a bash login file already reads ~/.bashrc.
+loads_bashrc() { [[ -f "$1" ]] && grep -q '\.bashrc' "$1"; }
+
+# rc_targets: every startup file to set up, for every shell this user has.
+# $SHELL is only the login shell, so installed shells count too.
+rc_targets() {
+  local login="${SHELL##*/}"
+  if [[ "$login" == zsh ]] || command -v zsh >/dev/null 2>&1; then
+    # zsh reads $ZDOTDIR/.zshrc when ZDOTDIR is set (dotfiles kept in ~/.config/zsh).
+    printf '%s\n' "${ZDOTDIR:-$HOME}/.zshrc"
+  fi
+  if [[ "$login" == bash ]] || [[ -f "$HOME/.bashrc" ]]; then
+    printf '%s\n' "$HOME/.bashrc"
+    # A login shell (macOS Terminal, Git Bash on Windows) reads .bash_profile and
+    # never .bashrc, unless .bash_profile loads it. Cover that case too.
+    if [[ -f "$HOME/.bash_profile" ]] && ! loads_bashrc "$HOME/.bash_profile"; then
+      printf '%s\n' "$HOME/.bash_profile"
+    fi
+  fi
+}
+
+if [[ -z "$NO_RC" ]]; then
+  : > "$RC_RECORD"
+  echo
+  if (( ${#RC_FILES[@]} )); then
+    echo "Shell setup:"
+    for rc in "${RC_FILES[@]}"; do add_to_rc "$rc"; done
+  else
+    targets=()
+    while IFS= read -r rc; do targets+=("$rc"); done < <(rc_targets)
+    if (( ${#targets[@]} )); then
+      echo "Shell setup:"
+      for rc in "${targets[@]}"; do add_to_rc "$rc"; done
+    else
+      echo "No bash or zsh startup file found. To set up your shell yourself, add:"
+      echo "  $RC_LINE"
+    fi
+  fi
 fi
 
 echo
-echo "Open a new terminal (or source your rc file), then: ent help"
+if (( ${#CHANGED[@]} )); then
+  echo "Open a new terminal so the \`ent\` command goes live."
+else
+  echo "Run: ent help"
+fi
 echo "To remove git-ent later: $SHARE/uninstall.sh"

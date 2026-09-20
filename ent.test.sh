@@ -370,15 +370,59 @@ ent "$T/doomed/main/core" branch feature/d >/dev/null
 [[ ! -d "$T/doomed" ]] && pass "destroy removed ent" || fail "destroy"
 
 step "install.sh and uninstall.sh"
-H="$T/home"; mkdir -p "$H"; printf 'export EDITOR=vim\n\nalias ll="ls -la"\n' >"$H/.zshrc"; cp "$H/.zshrc" "$T/zshrc.orig"
 REPO="$(dirname "$G")"
-HOME="$H" SHELL=/bin/zsh XDG_DATA_HOME= "$BASH" "$REPO/install.sh" >/dev/null
-HOME="$H" SHELL=/bin/zsh XDG_DATA_HOME= "$BASH" "$REPO/install.sh" >/dev/null
-check "1" "$(grep -c 'git-ent/completions/ent.zsh' "$H/.zshrc")" "install adds the source line once"
+# inst <home> [args...]: run install.sh with a throwaway HOME
+inst() { local h="$1"; shift; HOME="$h" XDG_DATA_HOME="" SHELL=/bin/zsh "$BASH" "$REPO/install.sh" "$@" >/dev/null; }
+# grep -c prints 0 AND exits non-zero when nothing matches, so swallow the status.
+rc_lines() { [[ -f "$1" ]] || { echo 0; return; }; grep -c 'completions/ent.sh' "$1" || true; }
+
+H="$T/home"; mkdir -p "$H"
+printf 'export EDITOR=vim\n\nalias ll="ls -la"\n' >"$H/.zshrc"; cp "$H/.zshrc" "$T/zshrc.orig"
+printf 'echo bashrc\n' >"$H/.bashrc";       cp "$H/.bashrc" "$T/bashrc.orig"
+printf 'echo login\n' >"$H/.bash_profile";  cp "$H/.bash_profile" "$T/bash_profile.orig"
+inst "$H"; inst "$H"     # twice: must stay idempotent
+check "1" "$(rc_lines "$H/.zshrc")" "install sets up .zshrc once"
+check "1" "$(rc_lines "$H/.bashrc")" "install sets up .bashrc once"
+check "1" "$(rc_lines "$H/.bash_profile")" "login .bash_profile set up when it does not read .bashrc"
 check "git-ent $("$BASH" "$G" --version | cut -d' ' -f2)" "$("$H/.local/bin/git-ent" --version)" "installed launcher runs"
-HOME="$H" XDG_DATA_HOME= "$BASH" "$H/.local/share/git-ent/uninstall.sh" -y >/dev/null
+expect_ok "ent.sh loads in bash" "$BASH" -c 'source "$1"; declare -f ent >/dev/null' _ "$H/.local/share/git-ent/completions/ent.sh"
+
+HOME="$H" XDG_DATA_HOME="" "$BASH" "$H/.local/share/git-ent/uninstall.sh" -y >/dev/null
 [[ ! -e "$H/.local/share/git-ent" && ! -e "$H/.local/bin/git-ent" ]] && pass "uninstall removes files" || fail "uninstall removes files"
 cmp -s "$T/zshrc.orig" "$H/.zshrc" && pass "uninstall restores .zshrc exactly" || fail "uninstall restores .zshrc exactly"
+cmp -s "$T/bashrc.orig" "$H/.bashrc" && pass "uninstall restores .bashrc exactly" || fail "uninstall restores .bashrc exactly"
+cmp -s "$T/bash_profile.orig" "$H/.bash_profile" && pass "uninstall restores .bash_profile exactly" || fail "uninstall restores .bash_profile exactly"
+
+step "install.sh: .bash_profile that already reads .bashrc is left alone"
+H2="$T/home2"; mkdir -p "$H2"
+printf 'echo rc\n' >"$H2/.bashrc"; printf '[ -f ~/.bashrc ] && . ~/.bashrc\n' >"$H2/.bash_profile"
+cp "$H2/.bash_profile" "$T/bp2.orig"
+inst "$H2"
+check "1" "$(rc_lines "$H2/.bashrc")" "bashrc set up"
+cmp -s "$T/bp2.orig" "$H2/.bash_profile" && pass ".bash_profile untouched when it reads .bashrc" || fail ".bash_profile untouched when it reads .bashrc"
+
+step "install.sh: ZDOTDIR, --rc and --no-rc"
+H3="$T/home3"; mkdir -p "$H3/.config/zsh"
+HOME="$H3" XDG_DATA_HOME="" SHELL=/bin/zsh ZDOTDIR="$H3/.config/zsh" "$BASH" "$REPO/install.sh" >/dev/null
+check "1" "$(rc_lines "$H3/.config/zsh/.zshrc")" "ZDOTDIR .zshrc set up"
+[[ ! -e "$H3/.zshrc" ]] && pass "~/.zshrc left alone when ZDOTDIR is set" || fail "~/.zshrc left alone when ZDOTDIR is set"
+
+H4="$T/home4"; mkdir -p "$H4"; printf 'echo mine\n' >"$H4/.zshrc"
+inst "$H4" --rc "$H4/custom.zsh"
+check "1" "$(rc_lines "$H4/custom.zsh")" "--rc sets up the named file"
+check "0" "$(rc_lines "$H4/.zshrc")" "--rc skips the automatic files"
+HOME="$H4" XDG_DATA_HOME="" "$BASH" "$H4/.local/share/git-ent/uninstall.sh" -y >/dev/null
+check "0" "$(rc_lines "$H4/custom.zsh")" "uninstall cleans the --rc file (from its record)"
+
+H5="$T/home5"; mkdir -p "$H5"; printf 'echo mine\n' >"$H5/.zshrc"; cp "$H5/.zshrc" "$T/zshrc5.orig"
+inst "$H5" --no-rc
+cmp -s "$T/zshrc5.orig" "$H5/.zshrc" && pass "--no-rc changes no startup file" || fail "--no-rc changes no startup file"
+
+step "uninstall.sh cleans up an install made by an older version"
+H6="$T/home6"; mkdir -p "$H6"
+printf 'alias x=1\n\n# git-ent: the `ent` command, tab completion and prompt helper (added by install.sh)\nsource "$HOME/.local/share/git-ent/completions/ent.zsh"\n' >"$H6/.zshrc"
+HOME="$H6" XDG_DATA_HOME="" "$BASH" "$REPO/uninstall.sh" -y >/dev/null
+check "alias x=1" "$(cat "$H6/.zshrc")" "old ent.zsh line removed"
 
 echo
 if (( bad )); then

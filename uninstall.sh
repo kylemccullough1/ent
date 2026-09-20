@@ -32,6 +32,14 @@ if (( ! YES )) && [[ -t 0 ]]; then
 fi
 
 # ---------- files ----------
+# Read the record of startup files install.sh changed before deleting the folder
+# that holds it. Standard locations are cleaned too, in case the record is gone.
+RC_TARGETS=()
+if [[ -f "$SHARE/rc-files" ]]; then
+  while IFS= read -r rc; do [[ -n "$rc" ]] && RC_TARGETS+=("$rc"); done < "$SHARE/rc-files"
+fi
+RC_TARGETS+=("${ZDOTDIR:-$HOME}/.zshrc" "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile")
+
 if [[ -d "$SHARE" ]]; then rm -rf "$SHARE"; echo "Removed $SHARE"; fi
 # Only delete a launcher install.sh wrote (it execs .../git-ent/git-ent), never
 # some other program that happens to be called git-ent.
@@ -42,6 +50,7 @@ fi
 # ---------- shell rc files ----------
 # remove_from_rc <rc-file>: drop install.sh's comment and source line, plus the blank
 # line install.sh put before them. Lines you wrote yourself are kept.
+# Matches the current line (ent.sh) and the ones older installs wrote (ent.zsh/ent.bash).
 remove_from_rc() {
   local rc="$1" tmp
   [[ -f "$rc" ]] || return 0
@@ -52,7 +61,7 @@ remove_from_rc() {
     held { if ($0 != marker) print ""; held = 0 }
     $0 == ""     { held = 1; next }
     $0 == marker { next }
-    /^[#[:space:]]*source .*git-ent\/completions\/ent\.(zsh|bash)/ { next }
+    /^[#[:space:]]*source .*git-ent\/completions\/ent\.(sh|zsh|bash)/ { next }
     { print }
     END { if (held) print "" }
   ' "$rc" > "$tmp"
@@ -62,8 +71,12 @@ remove_from_rc() {
   rm -f "$tmp"
   echo "Removed the git-ent lines from $rc"
 }
-remove_from_rc "$HOME/.zshrc"
-remove_from_rc "$HOME/.bashrc"
+seen=""
+for rc in "${RC_TARGETS[@]}"; do
+  case "$seen" in *"|$rc|"*) continue ;; esac   # a path can be listed twice
+  seen="$seen|$rc|"
+  remove_from_rc "$rc"
+done
 
 echo
 echo "git-ent is uninstalled. Open a new terminal so the \`ent\` command goes away."

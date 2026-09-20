@@ -38,17 +38,29 @@ git clone https://github.com/kylemccullough1/ent.git && cd ent
 The installer:
 
 - copies git-ent into `~/.local/share/git-ent` and puts a launcher in `~/.local/bin`
-- adds one `source` line to `~/.zshrc` or `~/.bashrc` (whichever shell you use),
-  once; re-running it never adds a second copy, and a line you comment out stays
-  commented out. Set `ENT_NO_RC=1` to skip this.
+- adds one `source` line to the startup files of the shells you have, once each:
+  `${ZDOTDIR:-~}/.zshrc` for zsh, `~/.bashrc` for bash, and `~/.bash_profile` as
+  well when that file doesn't already read `.bashrc` (macOS Terminal and Git Bash
+  start bash as a login shell, which reads only `.bash_profile`). It prints every
+  file it changed. Re-running never adds a second copy, and a line you comment out
+  stays commented out.
+
+The line loads `completions/ent.sh`, which pulls in the zsh or bash version
+depending on which shell reads it, so the same line works everywhere.
+
+```bash
+./install.sh --rc ~/.config/zsh/my.zsh   # set up this file instead (repeatable)
+ENT_RC=~/.config/zsh/my.zsh ./install.sh # same, as an environment variable
+./install.sh --no-rc                     # touch no startup file
+```
 
 Open a new terminal and you have the `ent` command (which `cd`s into the folders
 it creates or finds), tab completion, and the prompt helper. `git ent ...` works
 even without the `source` line. Re-run `./install.sh` after pulling updates.
 
 To remove it: `~/.local/share/git-ent/uninstall.sh` (or `./uninstall.sh` from the
-repo). It deletes what the installer added, including the `source` line and its
-comment, and leaves your ents alone.
+repo). It removes what the installer added, including the `source` line in every
+file it recorded, and leaves your ents alone.
 
 ## Use
 
@@ -133,6 +145,7 @@ Outside an ent the helper runs no programs at all, so it never slows your prompt
 | `lib/paths.sh` | Where things live: `ent_root`, `ent_container`, which branch owns a folder. |
 | `lib/config.sh` | Settings layers and `.entrc`. |
 | `lib/cmd/<verb>.sh` | One verb each, with its `help_<verb>` text. |
+| `completions/ent.sh` | Loaded by your shell; picks ent.zsh or ent.bash. |
 | `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper. |
 | `install.sh`, `uninstall.sh` | Copy into `~/.local`, add or remove the rc `source` line. |
 
