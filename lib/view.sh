@@ -62,9 +62,16 @@ _view_start() {
 }
 
 # _view_screen: the interactive part.
+#
+# Drawing rule: move the cursor home and overwrite line by line, clearing each line
+# as it goes (\033[K) and the rest of the screen at the end (\033[J). Wiping the
+# whole screen first (\033[2J) would leave it blank for an instant on every keypress,
+# which reads as flicker.
+VIEW_CHROME=3              # title + tab bar + blank line, above the body
+
 _view_screen() {
   local title="$1" render="$2"
-  local sel="${3:-0}" top=0 rows cols lines_count key rest redraw=1
+  local sel="${3:-0}" top=0 rows cols lines_count key rest redraw=1 page
   local -a body
 
   trap '_view_leave' EXIT INT TERM
@@ -73,7 +80,7 @@ _view_screen() {
   while true; do
     rows="$(tput lines 2>/dev/null || echo 24)"
     cols="$(tput cols  2>/dev/null || echo 80)"
-    local page=$((rows - 4))
+    page=$((rows - VIEW_CHROME - 1))     # -1 for the key bar on the last row
     (( page > 0 )) || page=1
 
     if (( redraw )); then
@@ -85,15 +92,17 @@ _view_screen() {
     (( top > lines_count - page )) && top=$((lines_count - page))
     (( top < 0 )) && top=0
 
-    printf '\033[H\033[2J'
-    _view_header "$title" "$sel" "$cols"
+    printf '\033[H'
+    _view_draw "$(printf '\033[1m%s\033[0m' "$title")"
+    _view_tabs "$sel" "$cols"; _view_draw "$REPLY"
+    _view_draw ""
     local i=$top end=$((top + page))
     while (( i < end && i < lines_count )); do
-      printf '%s\n' "${body[$i]}"
+      _view_draw "${body[$i]}"
       i=$((i + 1))
     done
-    printf '\033[%d;1H\033[7m %-*s\033[0m' "$rows" "$((cols - 1))" \
-      "tab/shift-tab worktree   j/k or arrows scroll   space/b page   g/G top/bottom   r reload   q quit  [$((sel + 1))/${#VIEW_BRANCHES[@]}]"
+    printf '\033[J'                      # clear whatever the last frame left below
+    _view_keybar "$sel" "$rows" "$cols" "$top" "$lines_count" "$page"
 
     IFS= read -rsn1 key || break
     if [[ "$key" == $'\033' ]]; then      # an escape sequence: arrows, shift-tab
@@ -123,16 +132,49 @@ _view_screen() {
   trap - EXIT INT TERM
 }
 
-# _view_header: the worktree tabs, with the selected one highlighted.
-_view_header() {
-  local title="$1" sel="$2" cols="$3" i=0 line=""
-  printf '\033[1m%s\033[0m\n' "$title"
-  while (( i < ${#VIEW_BRANCHES[@]} )); do
-    if (( i == sel )); then line+=$'\033[7m '"${VIEW_BRANCHES[$i]}"$' \033[0m'
-    else                     line+=" ${VIEW_BRANCHES[$i]} "; fi
+# _view_draw <text>: one row, clearing anything the previous frame left on it.
+_view_draw() { printf '%s\033[K\n' "$1"; }
+
+# _view_tabs <sel> <cols>: REPLY = the tab bar, trimmed to one row.
+# It keeps the selected worktree visible and marks hidden ones with < and >,
+# the way a scrolled list does, instead of wrapping onto more rows.
+_view_tabs() {
+  local sel="$1" cols="$2" n=${#VIEW_BRANCHES[@]}
+  local start="$sel" end=$((sel + 1)) width w grew out=""
+  width=$(( ${#VIEW_BRANCHES[$sel]} + 2 ))
+  while true; do
+    grew=0
+    if (( end < n )); then
+      w=$(( ${#VIEW_BRANCHES[$end]} + 2 ))
+      if (( width + w <= cols - 4 )); then width=$((width + w)); end=$((end + 1)); grew=1; fi
+    fi
+    if (( start > 0 )); then
+      w=$(( ${#VIEW_BRANCHES[$((start - 1))]} + 2 ))
+      if (( width + w <= cols - 4 )); then width=$((width + w)); start=$((start - 1)); grew=1; fi
+    fi
+    (( grew )) || break
+  done
+  (( start > 0 )) && out+="<"
+  local i=$start
+  while (( i < end )); do
+    if (( i == sel )); then out+=$'\033[7m '"${VIEW_BRANCHES[$i]}"$' \033[0m'
+    else                     out+=" ${VIEW_BRANCHES[$i]} "; fi
     i=$((i + 1))
   done
-  printf '%s\n\n' "$line"
+  (( end < n )) && out+=">"
+  REPLY="$out"
+}
+
+# _view_keybar: the reversed bar on the last row, with position and scroll percent.
+_view_keybar() {
+  local sel="$1" rows="$2" cols="$3" top="$4" count="$5" page="$6" where
+  if (( count <= page )); then where=all
+  elif (( top == 0 )); then where=top
+  elif (( top >= count - page )); then where=end
+  else where="$(( top * 100 / (count - page) ))%"
+  fi
+  printf '\033[%d;1H\033[7m %-*s\033[0m' "$rows" "$((cols - 1))" \
+    "tab/shift-tab worktree   j/k or arrows scroll   space/b page   g/G top/bottom   r reload   q quit  [$((sel + 1))/${#VIEW_BRANCHES[@]}  $where]"
 }
 
 _view_leave() { printf '\033[?25h\033[?1049l'; }

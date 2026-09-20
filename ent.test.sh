@@ -402,6 +402,22 @@ dbg="$(ent "$T/g1/main/core" log -- -n 1 --format=%s 2>&1)"; rc=$?
 echo "$dbg" | grep -q "add entrc" && pass "log passes args after -- to git" || fail "log passes args after -- to git (rc=$rc): $(echo "$dbg" | head -3 | tr '\n' '|')"
 expect_fail "log rejects a bad git arg" "" ent "$T/g1/main/core" log -- --definitely-not-a-flag
 
+step "viewer tab bar fits the window"
+( source "$(dirname "$G")/lib/state.sh"; source "$(dirname "$G")/lib/view.sh"
+  VIEW_BRANCHES=(main mainb twigs/mainb/mainc feature/something-long defect/x)
+  plain() { printf '%s' "$1" | sed $'s/\033\\[[0-9;]*m//g'; }
+  ok=1
+  for cols in 80 40 24; do
+    for sel in 0 2 4; do
+      _view_tabs "$sel" "$cols"; p="$(plain "$REPLY")"
+      (( ${#p} <= cols )) || { echo "  width ${#p} > $cols at sel=$sel" >&2; ok=0; }
+      case "$p" in *"${VIEW_BRANCHES[$sel]}"*) ;; *) echo "  selected hidden at cols=$cols sel=$sel" >&2; ok=0 ;; esac
+    done
+  done
+  exit $(( ! ok ))
+) && pass "tab bar trims to the width and keeps the selection visible" \
+  || fail "tab bar trims to the width and keeps the selection visible"
+
 # The full-screen viewer needs a terminal; `script` gives us one where available.
 if command -v script >/dev/null 2>&1; then
   view_keys() { printf '%s' "$2" | script -q /dev/null "$BASH" "$G" "$1" 2>&1 | tr -d '\r'; }
