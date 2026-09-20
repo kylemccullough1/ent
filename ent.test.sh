@@ -385,6 +385,35 @@ ent "$T/doomed/main/core" branch feature/d >/dev/null
 "$BASH" "$G" destroy "$T/doomed" --force >/dev/null
 [[ ! -d "$T/doomed" ]] && pass "destroy removed ent" || fail "destroy"
 
+step "status and log across worktrees"
+out="$(ent "$T/g1/main/core" status)"
+echo "$out" | grep -q "^=== main " && pass "status includes main" || fail "status includes main"
+echo "$out" | grep -q "^=== twigs/feature/456/sidecar " && pass "status includes twigs" || fail "status includes twigs"
+printf 'scratch\n' >"$T/g1/branches/feature/456/core/scratch.txt"
+dbg="$(ent "$T/g1/main/core" status)"
+echo "$dbg" | grep -q 'scratch.txt' && pass "status shows a dirty file" || fail "status shows a dirty file: $(echo "$dbg" | grep -A2 '=== feature/456 ' | tr '\n' '|')"
+rm -f "$T/g1/branches/feature/456/core/scratch.txt"
+case "$(ent "$T/g1/main/core" status)" in *$'\033'*) fail "piped status is plain text" ;; *) pass "piped status is plain text" ;; esac
+
+out="$(ent "$T/g1/main/core" log)"
+echo "$out" | grep -q "^=== main " && pass "log covers every worktree" || fail "log covers every worktree"
+echo "$out" | grep -q "add entrc" && pass "log shows commits" || fail "log shows commits: $(echo "$out" | sed -n 2,3p | tr '\n' '|')"
+dbg="$(ent "$T/g1/main/core" log -- -n 1 --format=%s 2>&1)"; rc=$?
+echo "$dbg" | grep -q "add entrc" && pass "log passes args after -- to git" || fail "log passes args after -- to git (rc=$rc): $(echo "$dbg" | head -3 | tr '\n' '|')"
+expect_fail "log rejects a bad git arg" "" ent "$T/g1/main/core" log -- --definitely-not-a-flag
+
+# The full-screen viewer needs a terminal; `script` gives us one where available.
+if command -v script >/dev/null 2>&1; then
+  view_keys() { printf '%s' "$2" | script -q /dev/null "$BASH" "$G" "$1" 2>&1 | tr -d '\r'; }
+  scr="$(cd "$T/g1/branches/feature/456/core" && view_keys status q)"
+  case "$scr" in *"tab/shift-tab"*) pass "viewer draws its key bar" ;; *) fail "viewer draws its key bar" ;; esac
+  case "$scr" in *$'\033[?1049h'*) pass "viewer uses the alternate screen" ;; *) fail "viewer uses the alternate screen" ;; esac
+  case "$scr" in *$'\033[?1049l'*) pass "viewer restores the screen on quit" ;; *) fail "viewer restores the screen on quit" ;; esac
+  case "$scr" in *$'\033[7m'" feature/456"*) pass "viewer opens on the worktree you are in" ;; *) fail "viewer opens on the worktree you are in" ;; esac
+  (cd "$T/g1/main/core" && printf 'jjGq' | script -q /dev/null "$BASH" "$G" log >/dev/null 2>&1) \
+    && pass "viewer scroll keys exit cleanly" || fail "viewer scroll keys exit cleanly"
+fi
+
 step "install.sh and uninstall.sh"
 REPO="$(dirname "$G")"
 # inst <home> [args...]: run install.sh with a throwaway HOME

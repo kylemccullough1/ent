@@ -73,6 +73,8 @@ ent branch feature/x               # branches/feature/x/core, cut from where you
 ent twig db                        # inside feature/x: branch twigs/feature/x/db
 ent up / ent down db / ent go feature/x
 ent list                           # the whole tree
+ent status                         # git status of every worktree, full screen
+ent log                            # git log of every worktree, full screen
 ent branch merge                   # merge into the parent, then remove the branch
 ent sync                           # update main from origin, merge main into your work
 ent rm feature/x -r                # remove a branch and its twigs (asks first)
@@ -101,6 +103,20 @@ ent help [verb]                    # every verb and flag
      Folders with uncommitted changes are skipped; conflicts are left in place
      and listed. A branch with an unfinished merge shows as `[MERGING]` in
      `ent list` and as `mainb|MERGING` in the prompt until you finish or abort it.
+
+## Looking around: `ent status` and `ent log`
+
+Both open a full screen you page through, one worktree at a time:
+
+```
+tab / shift-tab   next / previous worktree      j k, arrows   scroll
+space / b         page down / up                g G           top / bottom
+r                 reload                        q             quit
+```
+
+They open on the worktree you are standing in. `ent log -- --stat -n 20` passes
+everything after `--` to `git log`. Piped or redirected, both print every
+worktree in order instead, so `ent status | grep ...` works.
 
 ## Settings: `.entrc` (optional)
 
@@ -150,6 +166,7 @@ Outside an ent the helper runs no programs at all, so it never slows your prompt
 | `lib/paths.sh` | Where things live: `ent_root`, `ent_container`, which branch owns a folder. |
 | `lib/config.sh` | Settings layers and `.entrc`. |
 | `lib/cmd/<verb>.sh` | One verb each, with its `help_<verb>` text. |
+| `lib/view.sh` | The full-screen viewer behind `status` and `log`. |
 | `completions/ent.sh` | Loaded by your shell; picks ent.zsh or ent.bash. |
 | `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper. |
 | `install.sh`, `uninstall.sh` | Copy into `~/.local`, add or remove the rc `source` line. |

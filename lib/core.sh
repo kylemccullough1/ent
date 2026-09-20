@@ -48,6 +48,7 @@ confirm() {
 DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 YES=0 WIN=0
 MERGE_ABORT=0 MERGE_CONTINUE=0 FROM=""
 ARGS=()
+REST_ARGS=()     # whatever followed `--`, passed on to git (see cmd_log)
 ENT=""
 
 parse_args() {
@@ -71,7 +72,7 @@ parse_args() {
     esac
     shift
   done
-  while (( $# > 0 )); do ARGS+=("$1"); shift; done
+  while (( $# > 0 )); do REST_ARGS+=("$1"); shift; done
 }
 
 # arg <n>: the nth word after the verb (1-based), or empty.
