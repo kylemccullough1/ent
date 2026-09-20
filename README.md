@@ -99,7 +99,8 @@ ent help [verb]                    # every verb and flag
      are never offered.
   2. Merge main into every branch and twig, or `ent sync <branch>` for one.
      Folders with uncommitted changes are skipped; conflicts are left in place
-     and listed.
+     and listed. A branch with an unfinished merge shows as `[MERGING]` in
+     `ent list` and as `mainb|MERGING` in the prompt until you finish or abort it.
 
 ## Settings: `.entrc` (optional)
 
@@ -129,7 +130,8 @@ file:
 
 - **bash:** if git's `__git_ps1` is loaded, it becomes ent-aware automatically.
 - **either shell:** `__ent_ps1 " (%s)"` prints the ent branch for the current
-  folder, `ent` at the root, and nothing outside an ent.
+  folder, `ent` at the root, and nothing outside an ent. An unfinished merge or
+  rebase shows the way git writes it: `mainb|MERGING`.
 
 ```bash
 PS1='[\u@\h \W$(__ent_ps1 " (%s)")]\$ '               # bash

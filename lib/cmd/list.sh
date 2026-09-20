@@ -4,6 +4,7 @@ help_list() { cat <<'EOF'
 list                                   show branches and twigs as a tree
   Markers:  [?] checked out somewhere other than its ent folder
             [!] its parent branch no longer exists
+            [MERGING] / [REBASING] / ... an operation is unfinished there
 EOF
 }
 
@@ -25,6 +26,8 @@ list_node() {
   if [[ -n "$REPLY" ]] && ! has_local "$REPLY"; then marks+="!"; fi
   [[ -n "$marks" ]] && marks=" [$marks]"
   [[ "$b" == "$S_MAIN" ]] && label=" [main]"
+  # An unfinished merge or rebase, the way git's own prompt reports it.
+  state_of "$b" && label+=" [$REPLY]"
   printf '%s%s%s%s\n' "$indent" "$b" "$marks" "$label"
   children_of "$b"
   kids=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})

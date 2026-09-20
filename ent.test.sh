@@ -362,8 +362,16 @@ echo "$out" | grep -q "dirty (uncommitted changes)" && pass "skip reported" || f
 git -C "$E/branches/clash/core" rev-parse -q --verify MERGE_HEAD >/dev/null && pass "conflict left mid-merge" || fail "conflict left mid-merge"
 echo "$out" | grep -q "clash" && echo "$out" | grep -q "conflicts to resolve" && pass "conflict reported" || fail "conflict reported"
 
+step "an unfinished merge shows as MERGING"
+out2="$(ent "$E" list)"
+echo "$out2" | grep -q "clash \[MERGING\]" && pass "list marks the conflicted branch MERGING" || fail "list marks the conflicted branch MERGING (got: $(echo "$out2" | tr '\n' ' '))"
+check "clash|MERGING" "$(ent "$E/branches/clash/core" __where)" "prompt shows branch|MERGING inside the worktree"
+check "clash|MERGING" "$(ent "$E/branches/clash" __where)" "prompt shows branch|MERGING in the container folder"
+echo "$out2" | grep -q "^work$" && pass "clean branches carry no state" || fail "clean branches carry no state"
+
 step "sync <branch> merges main into just that branch"
 git -C "$E/branches/clash/core" merge --abort
+check "clash" "$(ent "$E/branches/clash" __where)" "MERGING clears after the merge is aborted"
 commit_in "$R" newer n2.txt
 ent "$E" sync fresh -y >/dev/null 2>&1
 [[ -f "$E/branches/fresh/core/n2.txt" ]] && pass "named branch synced" || fail "named branch synced"

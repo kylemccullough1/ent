@@ -16,12 +16,13 @@ S_PARENT_KEYS=() S_PARENT_VALS=()   # twig -> parent (branch.<twig>.entParent), 
 S_LOCAL=()                          # local branch names, sorted
 S_REMOTE=()                         # remote-tracking names, e.g. origin/main
 S_WT_BRANCH=()   S_WT_PATH=()       # branch -> path of the worktree it is checked out in
+S_STATE_PATH=()  S_STATE_VAL=()     # worktree path -> unfinished operation (MERGING, ...)
 REPLY="" REPLY_LIST=()
 
 load_state() {
   S_ENT="$ENT" S_MAIN="main"
   S_CFG_KEYS=() S_CFG_VALS=() S_PARENT_KEYS=() S_PARENT_VALS=()
-  S_LOCAL=() S_REMOTE=() S_WT_BRANCH=() S_WT_PATH=()
+  S_LOCAL=() S_REMOTE=() S_WT_BRANCH=() S_WT_PATH=() S_STATE_PATH=() S_STATE_VAL=()
   local key val ref path=""
 
   # 1. settings and twig parents (sorted so children come out in name order)
@@ -49,6 +50,38 @@ load_state() {
       "branch "*)   S_WT_BRANCH+=("${ref#branch refs/heads/}"); S_WT_PATH+=("$path") ;;
     esac
   done < <(git -C "$ENT" worktree list --porcelain)
+
+  # 4. unfinished operations (a conflicted merge, a rebase, ...). Each worktree's
+  # git files live in .bare/worktrees/<id>/, and git marks what is in progress with
+  # the same files it uses for its own prompt. Reading them here means `list` can
+  # show MERGING without running git per worktree.
+  local wtdir target state
+  for wtdir in "$ENT"/.bare/worktrees/*; do
+    [[ -f "$wtdir/gitdir" ]] || continue
+    target="$(<"$wtdir/gitdir")"        # <worktree>/.git
+    target="${target%/.git}"
+    state=""
+    if   [[ -f "$wtdir/MERGE_HEAD" ]];       then state=MERGING
+    elif [[ -d "$wtdir/rebase-merge" || -d "$wtdir/rebase-apply" ]]; then state=REBASING
+    elif [[ -f "$wtdir/CHERRY_PICK_HEAD" ]]; then state=CHERRY-PICKING
+    elif [[ -f "$wtdir/REVERT_HEAD" ]];      then state=REVERTING
+    else continue
+    fi
+    S_STATE_PATH+=("$target"); S_STATE_VAL+=("$state")
+  done
+}
+
+# state_of <branch>: REPLY = MERGING / REBASING / ... while an operation is
+# unfinished in that branch's worktree, else empty. Returns 1 when there is none.
+state_of() {
+  state_ready
+  wt_path_of "$1" || { REPLY=""; return 1; }
+  local p="$REPLY" i=0
+  while (( i < ${#S_STATE_PATH[@]} )); do
+    if [[ "${S_STATE_PATH[$i]}" == "$p" ]]; then REPLY="${S_STATE_VAL[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  REPLY=""; return 1
 }
 
 # state_ready: load the snapshot if it is missing or belongs to another ent.

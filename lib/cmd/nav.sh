@@ -70,8 +70,13 @@ cmd_go() {
 cmd_where() {
   ENT="$(ent_root 2>/dev/null)" || return 0
   load_state
-  if ! ent_branch_of_cwd 2>/dev/null; then
-    [[ "$(ent_norm "$PWD")" == "$ENT" ]] && echo ent
+  local b
+  if b="$(ent_branch_of_cwd 2>/dev/null)"; then
+    # git's prompt writes an unfinished operation as "branch|MERGING"; match it.
+    state_of "$b" && b="$b|$REPLY"
+    printf '%s\n' "$b"
+  elif [[ "$(ent_norm "$PWD")" == "$ENT" ]]; then
+    echo ent
   fi
   return 0
 }
