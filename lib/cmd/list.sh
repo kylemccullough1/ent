@@ -29,6 +29,6 @@ list_node() {
   children_of "$b"
   kids=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
   for child in ${kids[@]+"${kids[@]}"}; do
-    list_node "$child" "$indent  " "$container/twigs/${child#"$b-"}"
+    list_node "$child" "$indent  " "$container/twigs/${child##*/}"
   done
 }

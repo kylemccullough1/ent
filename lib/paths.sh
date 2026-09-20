@@ -36,23 +36,10 @@ ent_root() {
 # ent_slug <branch>: feature/foo -> feature-foo (accepted by `go` as a shorthand).
 ent_slug() { printf '%s' "${1//\//-}"; }
 
-# ent_twigname <branch>: the twig's own name, i.e. the branch minus "<parent>-".
+# ent_twigname <branch>: the twig's own name, which is the last part of
+# twigs/<branch>/<twig>. For anything else the name is returned unchanged.
 ent_twigname() {
-  parent_of "$1"
-  if [[ -n "$REPLY" && "$1" == "$REPLY"-* ]]; then printf '%s' "${1#"$REPLY-"}"; else printf '%s' "$1"; fi
-}
-
-# ent_depth <branch>: how many parents up to a branch (a branch is 0, its twig 1).
-ent_depth() {
-  local b="$1" d=0 seen=" "
-  while true; do
-    [[ "$seen" == *" $b "* ]] && { echo "cycle in entParent at $b" >&2; return 1; }
-    seen+="$b "
-    parent_of "$b"
-    [[ -z "$REPLY" ]] && break
-    b="$REPLY"; d=$((d + 1))
-  done
-  echo "$d"
+  if [[ "$1" == twigs/* ]]; then printf '%s' "${1##*/}"; else printf '%s' "$1"; fi
 }
 
 # ent_container <branch>: the folder holding the branch's core/ and twigs/.

@@ -9,6 +9,7 @@ EOF
 }
 
 # check_new_name <branch>: refuse names that exist or collide with ent's own folders.
+# `twigs/...` is where twig branches live, so a branch may not claim that namespace.
 check_new_name() {
   has_local "$1" && die "branch '$1' already exists"
   case "$(ent_slug "$1")" in main|branches|twigs|core|.bare|.git) die "'$1' resolves to a reserved name" ;; esac
@@ -20,6 +21,7 @@ cmd_branch() {
   local branch pat base core_dir
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base>]"
+  [[ "$branch" != twigs/* ]] || die "'twigs/' is reserved for twig branches; pick another name"
   check_new_name "$branch"
   pat="$(branch_pattern)"
   if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi

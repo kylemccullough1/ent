@@ -94,27 +94,32 @@ step "twig from cwd"
 cd "$T/g1/branches/feature/a/core"
 ent "$T/g1/branches/feature/a/core" twig auth >/dev/null
 [[ -d "$T/g1/branches/feature/a/twigs/auth/core" ]] && pass "twig container created" || fail "twig container"
-check "feature/a-auth" "$(git -C "$T/g1/branches/feature/a/twigs/auth/core" branch --show-current)" "twig branch checked out"
-check "feature/a" "$(git -C "$T/g1/.bare" config branch.feature/a-auth.entParent)" "twig parent recorded"
+check "twigs/feature/a/auth" "$(git -C "$T/g1/branches/feature/a/twigs/auth/core" branch --show-current)" "twig branch checked out"
+check "feature/a" "$(git -C "$T/g1/.bare" config branch.twigs/feature/a/auth.entParent)" "twig parent recorded"
 
 step "twig with --from"
 ent "$T/g1" twig db --from feature/a >/dev/null
 [[ -d "$T/g1/branches/feature/a/twigs/db/core" ]] && pass "twig --from created" || fail "twig --from"
 
-step "depth limits"
+step "a twig cannot have twigs (git forbids the name)"
 cd "$T/g1/branches/feature/a/twigs/auth/core"
-ent "$T/g1/branches/feature/a/twigs/auth/core" twig deep >/dev/null
-[[ -d "$T/g1/branches/feature/a/twigs/auth/twigs/deep/core" ]] && pass "twig at depth 2 created" || fail "depth 2"
-expect_fail "depth limit" "maxDepth" ent "$T/g1/branches/feature/a/twigs/auth/twigs/deep/core" twig too
+expect_fail "twig of a twig refused" "is a twig, and twigs go one level deep" \
+  ent "$T/g1/branches/feature/a/twigs/auth/core" twig deep
+expect_fail "twig of a twig refused via --from" "is a twig" ent "$T/g1" twig deep --from twigs/feature/a/auth
+expect_fail "twig name with a slash refused" "cannot contain" ent "$T/g1/branches/feature/a/core" twig has/slash
+
+step "twigs/ is reserved for twig branches"
+expect_fail "branch named twigs" "reserved" ent "$T/g1" branch twigs
+expect_fail "branch under twigs/" "reserved" ent "$T/g1" branch twigs/mine
 
 step "twig cannot be created at top level without --from"
 cd "$T/g1/main/core"
-expect_fail "twig from main without --from" "must be inside a branch or twig" ent "$T/g1" twig top-level
+expect_fail "twig from main without --from" "must be inside a branch" ent "$T/g1" twig top-level
 
 step "twig --from works from main"
 ent "$T/g1" twig sidecar --from feature/456 >/dev/null
 [[ -d "$T/g1/branches/feature/456/twigs/sidecar/core" ]] && pass "twig --from container" || fail "twig --from container"
-check "feature/456-sidecar" "$(git -C "$T/g1/branches/feature/456/twigs/sidecar/core" branch --show-current)" "twig --from branch name"
+check "twigs/feature/456/sidecar" "$(git -C "$T/g1/branches/feature/456/twigs/sidecar/core" branch --show-current)" "twig --from branch name"
 
 step "branchPattern from .entrc"
 cd "$T/g1/main/core"
@@ -130,7 +135,7 @@ source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
 ENT="$(Norm "$T/g1")"
 check "$(Norm "$T/g1/main/core")" "$(ent_core main)" "ent_core main"
 check "$(Norm "$T/g1/branches/feature/a/core")" "$(ent_core feature/a)" "ent_core feature/a"
-check "$(Norm "$T/g1/branches/feature/a/twigs/auth/core")" "$(ent_core feature/a-auth)" "ent_core twig"
+check "$(Norm "$T/g1/branches/feature/a/twigs/auth/core")" "$(ent_core twigs/feature/a/auth)" "ent_core twig"
 
 step "branch resolution from container dirs"
 check "main" \
@@ -139,7 +144,7 @@ check "main" \
 check "feature/ok" \
   "$(cd "$T/g1/branches/feature/ok" && ent_branch_of_cwd)" \
   "branch container resolves to branch"
-check "feature/456-sidecar" \
+check "twigs/feature/456/sidecar" \
   "$(cd "$T/g1/branches/feature/456/twigs/sidecar" && ent_branch_of_cwd)" \
   "twig container resolves to twig"
 check "feature/456" \
@@ -154,7 +159,7 @@ step "list"
 out="$(ent "$T/g1" list)"
 echo "$out" | grep -q "main \[main\]" && pass "list shows main" || fail "list main"
 echo "$out" | grep -q "feature/a" && pass "list shows feature/a" || fail "list feature/a"
-echo "$out" | grep -q "feature/a-auth" && pass "list shows twig" || fail "list shows twig"
+echo "$out" | grep -q "twigs/feature/a/auth" && pass "list shows twig" || fail "list shows twig"
 
 step "navigation resolves paths"
 cd "$T/g1/branches/feature/456/core"
@@ -199,6 +204,8 @@ check "$(Norm "$T/g1/branches/feature/456/core")" "$(ent "$T/g1" go feature/456)
 check "$(Norm "$T/g1/branches/feature/456/core")" "$(ent "$T/g1" go feature-456)" "go by slug"
 expect_fail "go missing name" "usage" ent "$T/g1" go
 expect_fail "go extra args" "usage" ent "$T/g1" go feature/456 extra
+check "$(Norm "$T/g1/branches/feature/456/twigs/sidecar/core")" "$(ent "$T/g1" go twigs/feature/456/sidecar)" "go by full twig name"
+check "$(Norm "$T/g1/branches/feature/456/twigs/sidecar/core")" "$(ent "$T/g1" go sidecar)" "go by twig short name"
 expect_fail "go unknown branch" "no branch matches" ent "$T/g1" go nope
 
 step "prompt helper verb (__where)"
@@ -215,8 +222,8 @@ mkdir -p "$T/linkbin" && ln -s "$G" "$T/linkbin/git-ent"
 check "$(Norm "$T/g1/branches/feature/456/core")" "$(cd "$T/g1" && "$BASH" "$T/linkbin/git-ent" go feature/456)" "symlinked git-ent finds lib/"
 
 step "rm --dry-run changes nothing"
-printf 'y\n' | ent "$T/g1" rm feature/a-auth -r -n >/dev/null 2>&1
-check "feature/a" "$(git -C "$T/g1/.bare" config branch.feature/a-auth.entParent)" "dry run kept the twig's parent record"
+printf 'y\n' | ent "$T/g1" rm twigs/feature/a/auth -r -n >/dev/null 2>&1
+check "feature/a" "$(git -C "$T/g1/.bare" config branch.twigs/feature/a/auth.entParent)" "dry run kept the twig's parent record"
 [[ -d "$T/g1/branches/feature/a/twigs/auth/core" ]] && pass "dry run kept the twig folder" || fail "dry run kept the twig folder"
 
 step "rm refuses to remove a branch that has twigs"
@@ -265,15 +272,16 @@ ent "$T/g1/branches/feature/merge/twigs/sub/core" branch merge -y >/dev/null
 [[ ! -d "$T/g1/branches/feature/merge/twigs/sub" ]] && pass "merge finish removed twig" || fail "merge finish removed twig"
 expect_fail "main cannot branch merge" "no parent" ent "$T/g1/main/core" branch merge -y
 
-step "branch merge merges nested twigs, then prints the parent folder"
+step "branch merge takes its twigs along, then prints the parent folder"
 ent "$T/g1/main/core" branch feature/nest >/dev/null
 ent "$T/g1/branches/feature/nest/core" twig a >/dev/null
-ent "$T/g1/branches/feature/nest/twigs/a/core" twig b >/dev/null
+ent "$T/g1/branches/feature/nest/core" twig b >/dev/null
 commit_in2() { (cd "$1" && echo "$2" >"$3" && git add "$3" && git commit -qm "$2"); }
-commit_in2 "$T/g1/branches/feature/nest/twigs/a/twigs/b/core" deep deep.txt
+commit_in2 "$T/g1/branches/feature/nest/twigs/a/core" deep deep.txt
+commit_in2 "$T/g1/branches/feature/nest/twigs/b/core" deeper deeper.txt
 out="$(ent "$T/g1/branches/feature/nest/core" branch merge -y 2>/dev/null)"
-[[ -f "$T/g1/main/core/deep.txt" ]] && pass "grand-twig work reached main" || fail "grand-twig work reached main"
-[[ ! -d "$T/g1/branches/feature/nest" ]] && pass "nested tree removed" || fail "nested tree removed"
+[[ -f "$T/g1/main/core/deep.txt" && -f "$T/g1/main/core/deeper.txt" ]] && pass "twig work reached main" || fail "twig work reached main"
+[[ ! -d "$T/g1/branches/feature/nest" ]] && pass "branch tree removed" || fail "branch tree removed"
 check "$(Norm "$T/g1/main/core")" "$out" "branch merge prints the parent's folder"
 
 step "rm: protect combines env, bare config and .entrc"
@@ -341,8 +349,8 @@ has_branch sq && fail "squash-merged (gone) branch removed" || pass "squash-merg
 has_branch cp && fail "content-merged branch removed" || pass "content-merged branch removed"
 has_branch closed && pass "deleted-on-origin but unmerged branch kept" || fail "deleted-on-origin but unmerged branch kept"
 has_branch prot && pass "protected merged branch kept" || fail "protected merged branch kept"
-has_branch withtwig && has_branch withtwig-extra && pass "branch kept when its twig has unmerged work" || fail "branch kept when its twig has unmerged work"
-echo "$out" | grep -q "twig withtwig-extra has work that is not in main" && pass "unmerged twig reported" || fail "unmerged twig reported"
+has_branch withtwig && has_branch twigs/withtwig/extra && pass "branch kept when its twig has unmerged work" || fail "branch kept when its twig has unmerged work"
+echo "$out" | grep -q "twig twigs/withtwig/extra has work that is not in main" && pass "unmerged twig reported" || fail "unmerged twig reported"
 [[ ! -d "$E/branches/done1" ]] && pass "merged branch folder removed" || fail "merged branch folder removed"
 
 step "sync: step 2 merges main into branches and twigs"

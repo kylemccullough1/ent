@@ -38,5 +38,4 @@ cfg_all() {
   printf '%s' "$out"
 }
 
-max_depth()      { local v; v="$(cfg maxDepth)"; printf '%s' "${v:-2}"; }
 branch_pattern() { cfg branchPattern; }

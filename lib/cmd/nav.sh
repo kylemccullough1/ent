@@ -54,6 +54,14 @@ cmd_go() {
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
     [[ "$(ent_slug "$b")" == "$name" ]] && { emit_path "$(ent_core "$b")"; return; }
   done
+  # A twig's short name, e.g. `go mainc` for twigs/mainb/mainc.
+  local match=""
+  for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
+    [[ "$b" == twigs/* && "${b##*/}" == "$name" ]] || continue
+    [[ -z "$match" ]] || { echo "Multiple twigs named '$name': $match $b" >&2; die "use the full branch name"; }
+    match="$b"
+  done
+  [[ -n "$match" ]] && { emit_path "$(ent_core "$match")"; return; }
   die "no branch matches '$name'"
 }
 

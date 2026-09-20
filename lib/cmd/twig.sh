@@ -1,30 +1,37 @@
-# ent twig: create a child worktree of a branch or another twig.
+# ent twig: create a child worktree of a branch.
 
 help_twig() { cat <<'EOF'
-twig <name> [--from <parent>]          create a twig of the current branch or twig
-  Inside feature/x, `twig auth` makes branch feature/x-auth at
-  branches/feature/x/twigs/auth/core, cut from feature/x.
-  From main or the ent root, name the parent with --from.
-  Nesting stops at maxDepth (default 2) from .entrc.
+twig <name> [--from <branch>]          create a twig of the current branch
+  Inside mainb, `twig mainc` makes branch twigs/mainb/mainc at
+  branches/mainb/twigs/mainc/core, cut from mainb.
+  From main or the ent root, name the branch with --from.
+  Twigs go one level deep: git cannot have both a branch and a folder of the
+  same name, so a twig of a twig has no name left to use.
 EOF
 }
 
 cmd_twig() {
   ensure_ent
-  local name parent branch container core_dir depth
+  local name parent branch container core_dir
   name="$(arg 1)"
-  [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "twig <name> [--from <parent>]"
+  [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "twig <name> [--from <branch>]"
+  [[ "$name" != */* ]] || die "twig name '$name' cannot contain '/'"
   if [[ -n "$FROM" ]]; then
     parent="$FROM"
   else
-    parent="$(ent_branch_of_cwd)" || die "ent twig <name> must be inside a branch or twig, or use --from"
-    [[ "$parent" != "$S_MAIN" ]] || die "ent twig <name> must be inside a branch or twig, or use --from"
+    parent="$(ent_branch_of_cwd)" || die "ent twig <name> must be inside a branch, or use --from"
+    [[ "$parent" != "$S_MAIN" ]] || die "ent twig <name> must be inside a branch, or use --from"
   fi
-  has_local "$parent" || die "parent branch '$parent' not found"
-  branch="$parent-$name"
+  has_local "$parent" || die "branch '$parent' not found"
+  branch="twigs/$parent/$name"
+  # A twig's name is already twigs/<branch>/<twig>, and git refuses to create
+  # twigs/<branch>/<twig>/<name> while twigs/<branch>/<twig> is a branch: one name
+  # cannot be both a ref and a folder of refs.
+  parent_of "$parent"
+  if [[ -n "$REPLY" || "$parent" == twigs/* ]]; then
+    die "'$parent' is a twig, and twigs go one level deep: git cannot create a branch under '$parent' while that name is itself a branch"
+  fi
   check_new_name "$branch"
-  depth="$(ent_depth "$parent")"; depth=$((depth + 1))
-  (( depth <= $(max_depth) )) || die "twig '$name' would be at depth $depth; maxDepth is $(max_depth)"
   # entParent is recorded only after the worktree exists, so build the path from the parent.
   container="$(ent_container "$parent")/twigs/$name"
   core_dir="$container/core"

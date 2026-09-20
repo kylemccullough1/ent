@@ -16,7 +16,7 @@ my-app/
         core/                     branch feature/x
         twigs/
           db/
-            core/                 twig feature/x-db (parent: feature/x)
+            core/                 twig twigs/feature/x/db (parent: feature/x)
 ```
 
 Every branch folder is a **container** holding `core/` (the checkout) and
@@ -70,7 +70,7 @@ ent init git@host:org/repo.git     # from a remote
 ent init ../old-clone new-ent      # from an existing clone (left untouched)
 
 ent branch feature/x               # branches/feature/x/core, cut from where you stand
-ent twig db                        # inside feature/x: twig feature/x-db
+ent twig db                        # inside feature/x: branch twigs/feature/x/db
 ent up / ent down db / ent go feature/x
 ent list                           # the whole tree
 ent branch merge                   # merge into the parent, then remove the branch
@@ -84,10 +84,14 @@ ent help [verb]                    # every verb and flag
 - A **branch** always has **main** as its parent. `ent branch <name>` cuts it from
   the branch or twig you are standing in (main when you are at the ent root), or
   from `--from <base>`. The name is used exactly as typed.
-- A **twig**'s parent is the branch or twig it was made from, recorded in
-  `.bare/config` as `branch.<twig>.entParent`. That record is local and never pushed.
+- A **twig** belongs to the branch it was made from. A twig `db` of branch
+  `feature/x` is the branch `twigs/feature/x/db`, and its parent is recorded in
+  `.bare/config` as `branch.<twig>.entParent`. That record is local, never pushed.
+  Twigs go **one level deep**: git stores branches as paths, so a name cannot be
+  both a branch and a folder of branches. `twigs/feature/x/db` therefore cannot
+  have a twig of its own, and `twigs/` is reserved as a branch name.
 - `ent branch merge` merges into the parent: a branch into main, a twig into its
-  parent. The branch's own twigs are merged into it first, then it is removed.
+  branch. The branch's own twigs are merged into it first, then it is removed.
 - `ent sync`:
   1. With an `origin`: fetch, fast-forward main, then for each branch this pull
      merged (merge commit, squash, or rebase), ask whether to delete it.
@@ -105,7 +109,6 @@ who uses ent on it. `.entrc.example` shows the format. Keys:
 | Key | Effect |
 |---|---|
 | `branchPattern` | Regular expression every new branch name must match. Twigs are exempt. |
-| `maxDepth` | How deep twigs may nest (default 2). |
 | `protect` | Branch names `ent rm` refuses, space-separated. |
 
 For a rule only on your machine, put it in the bare repo's config instead; it is
