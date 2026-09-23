@@ -38,6 +38,7 @@ cmd_twig() {
   [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
   run mkdir -p "$container"
   run git -C "$ENT" worktree add --no-track -b "$branch" "$core_dir" "$parent"
+  worktree_bare_guard "$core_dir"
   run git -C "$ENT" config "branch.$branch.entParent" "$parent"
   emit_path "$core_dir" "Created twig $branch at $core_dir"
 }

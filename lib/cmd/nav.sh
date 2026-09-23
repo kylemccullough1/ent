@@ -11,8 +11,12 @@ EOF
 
 cmd_up() {
   ensure_ent
-  local b; b="$(ent_branch_of_cwd)" || die "up from outside a worktree"
-  emit_path "$(ent_parent_core "$b")"
+  # Anywhere inside the ent that is not a worktree -- the root itself, or a
+  # bare container like branches/ -- has main/core as the sensible landing
+  # spot, so `up` is never a dead end.
+  local b
+  if b="$(ent_branch_of_cwd)"; then emit_path "$(ent_parent_core "$b")"
+  else emit_path "$(ent_core "$S_MAIN")"; fi
 }
 
 cmd_down() {
@@ -25,7 +29,12 @@ cmd_down() {
   else
     children_of "$b"; choices=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
   fi
-  (( ${#choices[@]} )) || die "no children to move down into"
+  if (( ! ${#choices[@]} )); then
+    if [[ -n "$b" ]]; then
+      die "no children to move down into: '$b' has no twigs. Make one with \`ent twig <name>\`, or jump to another branch with \`ent go <branch>\`"
+    fi
+    die "no children to move down into: this ent has no branches yet. Make one with \`ent branch <name>\`"
+  fi
   if [[ -z "$name" ]]; then
     if (( ${#choices[@]} > 1 )); then
       echo "Multiple choices:" >&2; printf '  %s\n' "${choices[@]}" >&2
@@ -43,16 +52,27 @@ cmd_down() {
   emit_path "$(ent_core "$match")"
 }
 
+# go_emit <branch>: hand back the branch's folder, or explain why there is none.
+# A branch can exist with no worktree (its folder removed, or it was made with
+# plain git), and emitting a path that is not there just makes the shell
+# wrapper fail at `cd`.
+go_emit() {
+  if ! wt_path_of "$1"; then
+    die "branch '$1' has no worktree. Give it one:  ent branch $1"
+  fi
+  emit_path "$(ent_core "$1")"
+}
+
 cmd_go() {
   ensure_ent
   local name b
   name="$(arg 1)"
   [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "go <branch>"
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
-    [[ "$b" == "$name" ]] && { emit_path "$(ent_core "$b")"; return; }
+    [[ "$b" == "$name" ]] && { go_emit "$b"; return; }
   done
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
-    [[ "$(ent_slug "$b")" == "$name" ]] && { emit_path "$(ent_core "$b")"; return; }
+    [[ "$(ent_slug "$b")" == "$name" ]] && { go_emit "$b"; return; }
   done
   # A twig's short name, e.g. `go mainc` for twigs/mainb/mainc.
   local match=""
@@ -61,7 +81,7 @@ cmd_go() {
     [[ -z "$match" ]] || { echo "Multiple twigs named '$name': $match $b" >&2; die "use the full branch name"; }
     match="$b"
   done
-  [[ -n "$match" ]] && { emit_path "$(ent_core "$match")"; return; }
+  [[ -n "$match" ]] && { go_emit "$match"; return; }
   die "no branch matches '$name'"
 }
 

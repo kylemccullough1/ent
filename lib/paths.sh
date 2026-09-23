@@ -9,25 +9,43 @@
 _ENT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -f load_state >/dev/null; then source "$_ENT_LIB/state.sh"; fi
 
-# ent_norm <path>: make a path comparable with the paths git prints.
-# Git Bash: /c/x -> C:/x via cygpath. Elsewhere: resolve symlinks, as git does.
+# ent_norm <path>: rewrite a path into the exact spelling git uses, so the two
+# can be compared as strings. Two things have to be settled, in this order:
+#
+#   1. follow links   a junction or symlink is renamed to the real folder,
+#                     because `git worktree list` always prints the real one
+#   2. spell it       Git Bash writes /c/x where git writes C:/x; cygpath -ml
+#                     converts. Off Windows there is nothing to convert.
+#
+# Step 1 used to be skipped on Windows, because cygpath alone does not follow a
+# link. That made every "which branch is this folder in" lookup miss whenever
+# you reached a worktree through a junction: `ent up` and `ent down` failed and
+# the prompt showed the wrong branch, while `ent list` still worked because it
+# resolves the path itself.
 ent_norm() {
-  if command -v cygpath >/dev/null 2>&1; then
-    cygpath -ml "$1"
-  else
-    (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1"
-  fi
+  local p
+  p="$( (cd "$1" 2>/dev/null && pwd -P) || printf '%s' "$1" )"
+  if command -v cygpath >/dev/null 2>&1; then cygpath -ml "$p"; else printf '%s' "$p"; fi
 }
 
 # ent_abs_path <dir>: absolute path of an existing directory (C:/... on Windows).
 ent_abs_path() { (cd "$1" && { pwd -W 2>/dev/null || pwd -P; }); }
 
-# ent_root: walk up from the current folder to the one that holds .bare.
+# is_ent_root <dir>: true when <dir> is an ent root. Both halves must hold:
+# .bare is the git database and .git is the one-line pointer naming it. A lone
+# .bare folder (a backup, an unrelated bare repo) is not an ent.
+is_ent_root() {
+  [[ -d "$1/.bare" && -f "$1/.git" ]] || return 1
+  local p; p="$(<"$1/.git")"
+  [[ "${p%$'\r'}" == "gitdir: ./.bare" ]]   # tolerate a CRLF-mangled pointer
+}
+
+# ent_root: walk up from the current folder to the one that is an ent root.
 # Starts from the real path (pwd -P), so a symlink pointing into an ent still works.
 ent_root() {
   local d; d="$(pwd -P)"
   while [[ -n "$d" && "$d" != "/" ]]; do
-    if [[ -d "$d/.bare" ]]; then ent_norm "$d"; return 0; fi
+    if is_ent_root "$d"; then ent_norm "$d"; return 0; fi
     d="${d%/*}"
   done
   return 1

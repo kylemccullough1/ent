@@ -26,6 +26,22 @@ expect_fail() { local msg="$1" want="$2"; shift 2
 Norm() { (cd "$1" && { cygpath -ml "$PWD" 2>/dev/null || pwd -P; }); }
 ent() { local d="$1"; shift; (cd "$d" && "$BASH" "$G" "$@"); }
 
+# ---------- platform ----------
+# Some behaviour genuinely differs between Windows and the Unixes, so those
+# tests come in pairs and each half runs only where it applies. A skipped test
+# is counted separately and never reported as a pass.
+case "$OSTYPE" in msys*|cygwin*) ON_WINDOWS=1 ;; *) ON_WINDOWS=0 ;; esac
+skipped=0
+skip() { skipped=$((skipped+1)); echo "SKIP $1 ($2)"; }
+# unix_only <name>: true when this test should run here.
+unix_only()    { if (( ON_WINDOWS )); then skip "$1" "unix only"; return 1; fi; return 0; }
+windows_only() { if (( ON_WINDOWS )); then return 0; fi; skip "$1" "windows only"; return 1; }
+# mklink_j <link> <target>: a Windows directory junction. Git Bash's `ln -s`
+# silently copies a folder unless Developer Mode is on, so a junction is the
+# link that can be relied on here. Git Bash reports one as a symlink and
+# `pwd -P` resolves it, which is what ent_root walks.
+mklink_j() { MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$1")" "$(cygpath -w "$2")" >/dev/null 2>&1; }
+
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
 [[ -d "$T/fresh/.bare" && -d "$T/fresh/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
@@ -214,8 +230,17 @@ check "ent" "$(ent "$T/g1" __where)" "__where at the ent root"
 check "" "$(ent "$T" __where)" "__where outside an ent prints nothing"
 
 step "ent wrapper shows help instead of cd-ing into it"
-out="$(cd "$T/g1" && PATH="$(dirname "$G"):$PATH" "$BASH" --norc -c 'source "$1"; ent go --help >/dev/null; pwd -P' _ "$(dirname "$G")/completions/ent.bash" 2>&1)"
-check "$(Norm "$T/g1")" "$out" "ent go --help leaves the folder alone"
+# `pwd -P` and `pwd -W` print the same folder two different ways on Git Bash
+# (/tmp/... vs C:/...), and Norm speaks the C:/... one, so each platform asks
+# for the spelling that matches.
+if unix_only "ent go --help leaves the folder alone"; then
+  out="$(cd "$T/g1" && PATH="$(dirname "$G"):$PATH" "$BASH" --norc -c 'source "$1"; ent go --help >/dev/null; pwd -P' _ "$(dirname "$G")/completions/ent.bash" 2>&1)"
+  check "$(Norm "$T/g1")" "$out" "ent go --help leaves the folder alone"
+fi
+if windows_only "ent go --help leaves the folder alone (windows)"; then
+  out="$(cd "$T/g1" && PATH="$(dirname "$G"):$PATH" "$BASH" --norc -c 'source "$1"; ent go --help >/dev/null; pwd -W' _ "$(dirname "$G")/completions/ent.bash" 2>&1)"
+  check "$(Norm "$T/g1")" "$out" "ent go --help leaves the folder alone (windows)"
+fi
 
 step "git-ent works through a symlink"
 mkdir -p "$T/linkbin" && ln -s "$G" "$T/linkbin/git-ent"
@@ -292,10 +317,20 @@ ENT_PROTECT=feature/keep2 expect_fail "protected by bare config despite env" "pr
 ENT_PROTECT=feature/keep2 expect_fail "protected by env" "protected" ent "$T/g1" rm feature/keep2 -y
 git -C "$T/g1/.bare" config --unset ent.protect
 
-step "commands work through a symlink into the ent"
-ln -s "$T/g1/branches/feature/ok" "$T/link-ok"
-expect_ok "list through symlink" ent "$T/link-ok" list
-check "$(Norm "$T/g1")" "$(ent "$T/link-ok" up)" "up through symlink"
+step "commands work through a link into the ent"
+# A real symlink on Unix; a directory junction on Windows, because Git Bash's
+# `ln -s` copies the folder instead of linking it unless Developer Mode is on,
+# and a copy has no .bare above it for ent_root to find.
+if unix_only "list/up through symlink"; then
+  ln -s "$T/g1/branches/feature/ok" "$T/link-ok"
+  expect_ok "list through symlink" ent "$T/link-ok" list
+  check "$(Norm "$T/g1")" "$(ent "$T/link-ok" up)" "up through symlink"
+fi
+if windows_only "list/up through junction"; then
+  mklink_j "$T/link-ok" "$T/g1/branches/feature/ok"
+  expect_ok "list through junction" ent "$T/link-ok" list
+  check "$(Norm "$T/g1")" "$(ent "$T/link-ok" up)" "up through junction"
+fi
 
 step "branch merge into main cleans up source"
 ent "$T/g1" branch feature/merge-test >/dev/null
@@ -485,11 +520,297 @@ printf 'alias x=1\n\n# git-ent: the `ent` command, tab completion and prompt hel
 HOME="$H6" XDG_DATA_HOME="" "$BASH" "$REPO/uninstall.sh" -y >/dev/null
 check "alias x=1" "$(cat "$H6/.zshrc")" "old ent.zsh line removed"
 
+
+# ---------------------------------------------------------------------------
+# ent init --here
+# ---------------------------------------------------------------------------
+
+# mkrepo <dir> [branch]: a clone with a remote, an ignored file, a stash and a
+# local-only branch -- everything an in-place conversion has to carry across.
+mkrepo() {
+  local d="$1" br="${2:-main}"
+  mkdir -p "$T/origin-src"
+  if [[ ! -d "$T/origin-src/.git" ]]; then
+    (cd "$T/origin-src" && git init -q -b main . && echo hi >README.md \
+      && git add . && git -c commit.gpgsign=false commit -qm initial)
+  fi
+  git clone -q "$T/origin-src" "$d"
+  (cd "$d" \
+    && git checkout -q -b feature/local-only && echo l >l.txt && git add l.txt \
+    && git -c commit.gpgsign=false commit -qm local && git checkout -q main \
+    && printf 'node_modules/\n.env\n' >.gitignore && git add .gitignore \
+    && git -c commit.gpgsign=false commit -qm ignore \
+    && mkdir -p node_modules && echo payload >node_modules/x && echo secret >.env \
+    && echo tostash >>README.md && git stash push -q -m ent-test-stash)
+  if [[ "$br" != main ]]; then
+    (cd "$d" && git checkout -q -b "$br" && echo b >b.txt && git add b.txt \
+      && git -c commit.gpgsign=false commit -qm onbranch)
+  fi
+}
+
+step "init --here converts a repo in place"
+mkrepo "$T/adopt"
+ent "$T/adopt" init --here -y >/dev/null 2>&1
+[[ -d "$T/adopt/.bare" && -d "$T/adopt/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
+check "gitdir: ./.bare" "$(cat "$T/adopt/.git")" ".git is the pointer file"
+check "main" "$(git -C "$T/adopt/main/core" branch --show-current)" "core is on main"
+check "main" "$(git -C "$T/adopt" config ent.main)" "ent.main recorded"
+check "" "$(git -C "$T/adopt/main/core" status --porcelain)" "converted worktree is clean"
+check "payload" "$(cat "$T/adopt/main/core/node_modules/x" 2>/dev/null)" "ignored node_modules moved"
+check "secret" "$(cat "$T/adopt/main/core/.env" 2>/dev/null)" "ignored .env moved"
+check "1" "$(git -C "$T/adopt/main/core" stash list | grep -c ent-test-stash)" "stash survived"
+check "origin/main" "$(git -C "$T/adopt/main/core" rev-parse --abbrev-ref '@{u}')" "upstream survived"
+check "1" "$(git -C "$T/adopt" show-ref --verify -q refs/heads/feature/local-only && echo 1)" "local-only branch survived"
+check "+refs/heads/*:refs/remotes/origin/*" "$(git -C "$T/adopt" config --get remote.origin.fetch)" "fetch refspec survived"
+[[ ! -e "$T/adopt/.ent-stage" && ! -e "$T/adopt/.ent-convert-recovery.sh" ]] && pass "no scratch left behind" || fail "scratch left behind"
+
+step "init --here really rebuilds the index"
+# --no-checkout leaves the index empty; without the reset write-tree returns the
+# empty tree, and a later `commit -a` would record the deletion of everything.
+check "$(git -C "$T/adopt/main/core" rev-parse 'HEAD^{tree}')" \
+      "$(git -C "$T/adopt/main/core" write-tree)" "index matches HEAD's tree"
+
+step "the converted ent behaves like any other"
+out="$(ent "$T/adopt/main/core" list 2>/dev/null)"
+echo "$out" | grep -q "main" && pass "list works on a converted ent" || fail "list works on a converted ent"
+ent "$T/adopt/main/core" branch feature/after >/dev/null 2>&1
+[[ -d "$T/adopt/branches/feature/after/core" ]] && pass "branch works on a converted ent" || fail "branch on converted ent"
+printf 'y\n' | ent "$T/adopt" rm feature/after >/dev/null 2>&1
+[[ ! -d "$T/adopt/branches/feature/after" ]] && pass "rm works on a converted ent" || fail "rm on converted ent"
+
+step "init --here refuses what it cannot convert safely"
+mkrepo "$T/dirty"; echo scratch >>"$T/dirty/README.md"
+expect_fail "refuses a dirty tree" "uncommitted changes" ent "$T/dirty" init --here -y
+mkrepo "$T/detached"; (cd "$T/detached" && git checkout -q --detach HEAD)
+expect_fail "refuses a detached HEAD" "HEAD is detached" ent "$T/detached" init --here -y
+expect_fail "refuses an existing ent" "already an ent" ent "$T/adopt" init --here -y
+mkrepo "$T/hasbare"; mkdir "$T/hasbare/.bare"
+expect_fail "refuses a pre-existing .bare" "already exists and is not an ent" ent "$T/hasbare" init --here -y
+mkrepo "$T/subdir"; mkdir -p "$T/subdir/deep"
+expect_fail "refuses running from a subdirectory" "top of the repo" ent "$T/subdir/deep" init --here -y
+expect_fail "refuses a linked worktree" "linked worktree" ent "$T/adopt/main/core" init --here -y
+
+step "init --here -n changes nothing"
+mkrepo "$T/dryrun"
+ent "$T/dryrun" init --here -n >/dev/null 2>&1
+[[ -d "$T/dryrun/.git" && ! -e "$T/dryrun/.bare" && ! -d "$T/dryrun/main" ]] \
+  && pass "dry run left the repo alone" || fail "dry run changed something"
+
+step "init --here parks a non-default branch and checks out the default"
+mkrepo "$T/onbranch" feature/x
+ent "$T/onbranch" init --here -y >/dev/null 2>&1
+check "main" "$(git -C "$T/onbranch/main/core" branch --show-current)" "main/core is on the default branch"
+check "feature/x" "$(git -C "$T/onbranch/branches/feature/x/core" branch --show-current)" "current branch parked in its own folder"
+check "payload" "$(cat "$T/onbranch/branches/feature/x/core/node_modules/x" 2>/dev/null)" "ignored files went with the parked branch"
+check "main" "$(git -C "$T/onbranch" config ent.main)" "ent.main is the default, not the parked branch"
+[[ -d "$T/onbranch/branches/feature/x/twigs" ]] && pass "parked branch has a twigs sibling" || fail "parked branch twigs"
+check "1" "$(git -C "$T/onbranch" log --oneline feature/x | grep -c onbranch)" "parked branch kept its commits"
+
+step "init --here with extra worktrees: drop"
+mkrepo "$T/wtdrop"
+git -C "$T/wtdrop" worktree add -q "$T/wtdrop-side" feature/local-only 2>/dev/null
+ent "$T/wtdrop" init --here -y --worktrees drop >/dev/null 2>&1
+[[ -d "$T/wtdrop/main/core" ]] && pass "drop converted in place, name kept" || fail "drop converted in place"
+[[ ! -d "$T/wtdrop-side" ]] && pass "drop removed the extra worktree folder" || fail "drop removed folder"
+check "1" "$(git -C "$T/wtdrop" show-ref --verify -q refs/heads/feature/local-only && echo 1)" "drop kept the branch"
+
+step "init --here with extra worktrees: move"
+mkrepo "$T/wtmove"
+git -C "$T/wtmove" worktree add -q "$T/wtmove-side" feature/local-only 2>/dev/null
+ent "$T/wtmove" init --here -y --worktrees move >/dev/null 2>&1
+[[ -d "$T/wtmove-ent/main/core" ]] && pass "move built <name>-ent" || fail "move built <name>-ent"
+[[ -d "$T/wtmove-ent/branches/feature/local-only/core" ]] && pass "extra worktree became a branch folder" || fail "extra worktree became a branch folder"
+[[ ! -d "$T/wtmove-side" ]] && pass "old worktree path is gone" || fail "old worktree path is gone"
+check "" "$(git -C "$T/wtmove-ent/branches/feature/local-only/core" status --porcelain)" "moved worktree is clean"
+check "l" "$(cat "$T/wtmove-ent/branches/feature/local-only/core/l.txt" 2>/dev/null)" "moved worktree has its files"
+
+step "init --here prompts when worktrees exist and no flag is given"
+mkrepo "$T/wtcancel"
+git -C "$T/wtcancel" worktree add -q "$T/wtcancel-side" feature/local-only 2>/dev/null
+printf 'c\n' | ent "$T/wtcancel" init --here >/dev/null 2>&1
+[[ -d "$T/wtcancel/.git" && ! -e "$T/wtcancel/.bare" ]] && pass "cancel changed nothing" || fail "cancel changed something"
+
+step "sparse-checkout does not brick an ent"
+# git sparse-checkout sets extensions.worktreeConfig, which makes linked
+# worktrees honour the shared core.bare=true unless each one overrides it.
+mkrepo "$T/sparse"
+ent "$T/sparse" init --here -y >/dev/null 2>&1
+ent "$T/sparse/main/core" branch feature/sp >/dev/null 2>&1
+(cd "$T/sparse/main/core" && git sparse-checkout set README.md >/dev/null 2>&1)
+git -C "$T/sparse/main/core" status >/dev/null 2>&1 && pass "main/core still works after sparse-checkout" || fail "main/core bricked by sparse-checkout"
+git -C "$T/sparse/branches/feature/sp/core" status >/dev/null 2>&1 && pass "branch still works after sparse-checkout" || fail "branch bricked by sparse-checkout"
+ent "$T/sparse/main/core" branch feature/sp2 >/dev/null 2>&1
+git -C "$T/sparse/branches/feature/sp2/core" status >/dev/null 2>&1 && pass "a branch made afterwards works" || fail "branch made after sparse-checkout is bricked"
+
+step "a lone .bare folder is not an ent"
+mkdir -p "$T/fake/.bare"
+expect_fail "stray .bare is not an ent" "not inside an ent" ent "$T/fake" list
+mkdir -p "$T/fakedeep/.bare" "$T/fakedeep/sub"
+expect_fail "stray .bare above the cwd is not an ent" "not inside an ent" ent "$T/fakedeep/sub" list
+printf 'gitdir: ./.bare\r\n' >"$T/adopt/.git"
+out="$(ent "$T/adopt/main/core" list 2>/dev/null)"
+echo "$out" | grep -q "main" && pass "a CRLF pointer still resolves" || fail "CRLF pointer"
+printf 'gitdir: ./.bare\n' >"$T/adopt/.git"
+
+
+step "init --here carries untracked files after a yes"
+mkrepo "$T/untr"
+echo note >"$T/untr/notes.txt"; mkdir -p "$T/untr/scratch"; echo 'select 1;' >"$T/untr/scratch/try.sql"
+ent "$T/untr" init --here -y >/dev/null 2>&1
+[[ -f "$T/untr/main/core/notes.txt" ]] && pass "untracked file moved" || fail "untracked file moved"
+[[ -f "$T/untr/main/core/scratch/try.sql" ]] && pass "untracked file in a subfolder moved" || fail "untracked subfolder file moved"
+[[ -f "$T/untr/main/core/node_modules/x" ]] && pass "ignored file still moved too" || fail "ignored file moved"
+check "?? notes.txt
+?? scratch/" "$(git -C "$T/untr/main/core" status --porcelain)" "they are still untracked, and nothing else changed"
+check "$(git -C "$T/untr/main/core" rev-parse 'HEAD^{tree}')" \
+      "$(git -C "$T/untr/main/core" write-tree)" "index still matches HEAD's tree"
+
+step "init --here leaves the repo alone when the answer is no"
+mkrepo "$T/untrno"; echo note >"$T/untrno/notes.txt"
+printf 'n\n' | ent "$T/untrno" init --here >/dev/null 2>&1
+[[ -d "$T/untrno/.git" && ! -e "$T/untrno/.bare" ]] && pass "declining changed nothing" || fail "declining changed nothing"
+[[ -f "$T/untrno/notes.txt" ]] && pass "the untracked file stayed put" || fail "untracked file stayed put"
+
+step "init --here will not guess when there is nobody to ask"
+mkrepo "$T/untrtty"; echo note >"$T/untrtty/notes.txt"
+ent "$T/untrtty" init --here </dev/null >/dev/null 2>&1
+[[ -d "$T/untrtty/.git" && ! -e "$T/untrtty/.bare" ]] && pass "no answer means no" || fail "no answer means no"
+
+step "init --here -n lists untracked files and changes nothing"
+mkrepo "$T/untrdry"; echo note >"$T/untrdry/notes.txt"
+out="$(ent "$T/untrdry" init --here -n 2>&1)"
+echo "$out" | grep -q "notes.txt" && pass "dry run names the untracked file" || fail "dry run names the untracked file"
+echo "$out" | grep -q "untracked file" && pass "dry run says how many" || fail "dry run says how many"
+[[ -d "$T/untrdry/.git" && ! -e "$T/untrdry/.bare" ]] && pass "dry run changed nothing" || fail "dry run changed nothing"
+
+step "tracked changes still stop the conversion"
+mkrepo "$T/untrmod"; echo more >>"$T/untrmod/README.md"; echo note >"$T/untrmod/notes.txt"
+expect_fail "modified tracked file still refused" "uncommitted changes" ent "$T/untrmod" init --here -y
+
+step "untracked files follow a parked branch"
+mkrepo "$T/untrpark" feature/x
+echo note >"$T/untrpark/notes.txt"
+ent "$T/untrpark" init --here -y >/dev/null 2>&1
+[[ -f "$T/untrpark/branches/feature/x/core/notes.txt" ]] && pass "untracked file went with the parked branch" || fail "untracked file parked"
+[[ ! -f "$T/untrpark/main/core/notes.txt" ]] && pass "and not into main/core" || fail "untracked file leaked into main/core"
+
+step "drop refuses to delete a worktree holding untracked files"
+mkrepo "$T/wtu"
+git -C "$T/wtu" worktree add -q "$T/wtu-side" feature/local-only 2>/dev/null
+echo keepme >"$T/wtu-side/keepme.txt"
+expect_fail "drop refuses when it would delete untracked work" "would delete them" ent "$T/wtu" init --here -y --worktrees drop
+[[ -f "$T/wtu-side/keepme.txt" ]] && pass "the untracked file is still there" || fail "untracked file destroyed"
+[[ -d "$T/wtu/.git" && ! -e "$T/wtu/.bare" ]] && pass "and the repo is untouched" || fail "repo changed despite refusal"
+
+step "move carries a worktree's untracked files along"
+ent "$T/wtu" init --here -y --worktrees move >/dev/null 2>&1
+[[ -f "$T/wtu-ent/branches/feature/local-only/core/keepme.txt" ]] && pass "untracked file moved with the worktree" || fail "untracked file moved with the worktree"
+
+
+# ---------------------------------------------------------------------------
+# Round 3: the cloud review findings, navigation, and folderless branches
+# ---------------------------------------------------------------------------
+
+step "drop waits for the final yes before removing anything"
+# The removals used to run inside the worktree question, so answering no to
+# "Convert?" afterwards left the folders already deleted.
+mkrepo "$T/dropno"
+git -C "$T/dropno" worktree add -q "$T/dropno-side" feature/local-only 2>/dev/null
+printf 'd\nn\n' | ent "$T/dropno" init --here >/dev/null 2>&1
+[[ -d "$T/dropno-side" ]] && pass "saying no kept the worktree folder" || fail "saying no deleted the worktree folder"
+[[ -d "$T/dropno/.git" && ! -e "$T/dropno/.bare" ]] && pass "and the repo is untouched" || fail "repo changed after cancelling"
+printf 'd\ny\n' | ent "$T/dropno" init --here >/dev/null 2>&1
+[[ ! -d "$T/dropno-side" ]] && pass "saying yes does remove it" || fail "yes did not remove it"
+[[ -d "$T/dropno/main/core" ]] && pass "and converts in place" || fail "yes did not convert"
+
+step "a kept worktree on the default branch becomes main/core"
+# main/core used to be created while that worktree still held the branch, so
+# git refused -- and it failed after the rollback trap was already disarmed.
+mkrepo "$T/wtdef" feature/x
+git -C "$T/wtdef" worktree add -q "$T/wtdef-main" main 2>/dev/null
+ent "$T/wtdef" init --here -y --worktrees move >/dev/null 2>&1
+[[ -d "$T/wtdef-ent/main/core" ]] && pass "main/core exists" || fail "main/core exists"
+check "main" "$(git -C "$T/wtdef-ent/main/core" branch --show-current 2>/dev/null)" "main/core is on the default branch"
+[[ ! -d "$T/wtdef-ent/branches/main" ]] && pass "no branches/main was created" || fail "a second main folder was created"
+[[ ! -d "$T/wtdef-main" ]] && pass "the old worktree path is gone" || fail "old worktree path still there"
+check "feature/x" "$(git -C "$T/wtdef-ent/branches/feature/x/core" branch --show-current 2>/dev/null)" "the parked branch kept its folder"
+
+step "kept worktrees get the core.bare guard too"
+mkrepo "$T/wtsparse"
+git -C "$T/wtsparse" worktree add -q "$T/wtsparse-side" feature/local-only 2>/dev/null
+(cd "$T/wtsparse" && git sparse-checkout set README.md >/dev/null 2>&1)
+ent "$T/wtsparse" init --here -y --worktrees move >/dev/null 2>&1
+git -C "$T/wtsparse-ent/branches/feature/local-only/core" status >/dev/null 2>&1 \
+  && pass "the moved worktree still works with worktreeConfig on" || fail "moved worktree bricked by worktreeConfig"
+
+step "a worktree inside the repo is refused for move"
+mkrepo "$T/wtnest"
+git -C "$T/wtnest" worktree add -q "$T/wtnest/sub" feature/local-only 2>/dev/null
+expect_fail "move refuses a worktree inside the repo" "inside the repo being converted" \
+  ent "$T/wtnest" init --here -y --worktrees move
+[[ -d "$T/wtnest/.git" && ! -e "$T/wtnest/.bare" ]] && pass "the repo is untouched" || fail "repo changed despite refusal"
+[[ -d "$T/wtnest/sub" ]] && pass "the nested worktree is untouched" || fail "nested worktree changed"
+ent "$T/wtnest" init --here -y --worktrees drop >/dev/null 2>&1
+[[ -d "$T/wtnest/main/core" ]] && pass "drop still converts it" || fail "drop failed on a nested worktree"
+
+step "cancel does not complain about uncommitted work"
+mkrepo "$T/wtcancel2"
+git -C "$T/wtcancel2" worktree add -q "$T/wtcancel2-side" feature/local-only 2>/dev/null
+echo dirty >>"$T/wtcancel2-side/l.txt"
+out="$(printf 'c\n' | ent "$T/wtcancel2" init --here 2>&1)"
+echo "$out" | grep -q "Cancelled" && pass "cancel says cancelled" || fail "cancel says cancelled: $(echo "$out" | tail -1)"
+echo "$out" | grep -q "uncommitted changes" && fail "cancel still mentions uncommitted changes" || pass "cancel does not mention uncommitted changes"
+[[ -d "$T/wtcancel2/.git" && ! -e "$T/wtcancel2/.bare" ]] && pass "cancel changed nothing" || fail "cancel changed something"
+
+step "up and down are no longer dead ends"
+check "$(Norm "$T/g1/main/core")" "$(ent "$T/g1" up)" "up from the ent root lands on main/core"
+check "$(Norm "$T/g1/main/core")" "$(ent "$T/g1/branches" up)" "up from a bare container lands on main/core"
+check "$(Norm "$T/g1")" "$(ent "$T/g1/branches/feature/ok/core" up)" "up from a branch still goes to the ent root"
+out="$(ent "$T/g1/branches/feature/ok/core" down 2>&1)"
+echo "$out" | grep -q "no children to move down into" && pass "down still says no children" || fail "down wording changed"
+echo "$out" | grep -q "ent go" && pass "down points at ent go" || fail "down does not point at ent go"
+
+step "a branch with no worktree is visible, unreachable, and recoverable"
+ent "$T/g1" branch feature/lonely >/dev/null 2>&1
+# How you actually end up here: the folder goes by hand, and git prunes the
+# registration. The branch itself is untouched.
+rm -rf "$T/g1/branches/feature/lonely"
+git -C "$T/g1" worktree prune
+check "1" "$(git -C "$T/g1" show-ref --verify -q refs/heads/feature/lonely && echo 1)" "the branch itself survived"
+check "" "$(git -C "$T/g1" worktree list --porcelain | grep -c 'feature/lonely' | sed 's/^0$//')" "its worktree really is gone"
+out="$(ent "$T/g1" list 2>/dev/null)"
+echo "$out" | grep -q "feature/lonely \[no worktree\]" \
+  && pass "list marks it [no worktree]" || fail "list marks it: $(echo "$out" | grep lonely)"
+expect_fail "go refuses a branch with no worktree" "has no worktree" ent "$T/g1" go feature/lonely
+ent "$T/g1" branch feature/lonely >/dev/null 2>&1
+[[ -d "$T/g1/branches/feature/lonely/core" ]] && pass "branch gave it a folder back" || fail "branch did not adopt it"
+check "feature/lonely" "$(git -C "$T/g1/branches/feature/lonely/core" branch --show-current 2>/dev/null)" "the folder is on that same branch"
+[[ -d "$T/g1/branches/feature/lonely/twigs" ]] && pass "and has a twigs sibling" || fail "no twigs sibling"
+out="$(ent "$T/g1" list 2>/dev/null)"
+echo "$out" | grep -q "feature/lonely \[no worktree\]" \
+  && fail "still marked [no worktree] after adoption" || pass "the mark is gone after adoption"
+expect_fail "a branch that still has a worktree is refused" "already exists" ent "$T/g1" branch feature/lonely
+step "init --here and the folder your shell is standing in"
+# Windows cannot rename a folder a process is sitting in, so --here refuses
+# rather than failing halfway. Unix has no such rule, so there it just works.
+mkrepo "$T/stand"; mkdir -p "$T/stand/sub"
+if windows_only "refuses while standing inside the repo"; then
+  expect_fail "refuses while standing inside the repo" "standing in" \
+    ent "$T/stand/sub" init --here "$T/stand"
+  [[ -d "$T/stand/.git" && ! -e "$T/stand/.bare" ]] && pass "the repo was left alone" || fail "the repo was left alone"
+fi
+if unix_only "converts while standing inside the repo"; then
+  ent "$T/stand/sub" init --here -y "$T/stand" >/dev/null 2>&1
+  [[ -d "$T/stand/.bare" && -d "$T/stand/main/core" ]] && pass "converts while standing inside the repo" || fail "converts while standing inside the repo"
+fi
+step "ent init . points at --here instead of nesting"
+mkrepo "$T/nest"
+expect_fail "init . refuses to nest inside the source" "ent init --here" ent "$T/nest" init .
 echo
 if (( bad )); then
-  echo "SOME FAILURES ($n checks)"
+  echo "SOME FAILURES ($n checks, $skipped skipped)"
   exit 1
 else
-  echo "$n checks, ALL PASS"
+  echo "$n checks, $skipped skipped, ALL PASS"
   exit 0
 fi

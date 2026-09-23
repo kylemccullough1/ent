@@ -21,11 +21,15 @@ cmd_list() {
 # The container is passed down so no path has to be recomputed per twig.
 list_node() {
   local b="$1" indent="$2" container="$3" marks="" label="" kids child
-  if wt_path_of "$b" && [[ "$REPLY" != "$container/core" ]]; then marks+="?"; fi
+  if wt_path_of "$b"; then
+    if [[ "$REPLY" != "$container/core" ]]; then marks+="?"; fi
+  else
+    label+=" [no worktree]"   # a branch with nowhere to stand
+  fi
   parent_of "$b"
   if [[ -n "$REPLY" ]] && ! has_local "$REPLY"; then marks+="!"; fi
   [[ -n "$marks" ]] && marks=" [$marks]"
-  [[ "$b" == "$S_MAIN" ]] && label=" [main]"
+  if [[ "$b" == "$S_MAIN" ]]; then label=" [main]$label"; fi
   # An unfinished merge or rebase, the way git's own prompt reports it.
   state_of "$b" && label+=" [$REPLY]"
   printf '%s%s%s%s\n' "$indent" "$b" "$marks" "$label"

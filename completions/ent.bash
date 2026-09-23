@@ -5,7 +5,7 @@
 # `git <subcommand> ...`, so defining _git_ent is all it takes to complete `git ent <TAB>`.
 
 _git_ent_verbs="init branch twig rm sync list status log path up down go destroy help"
-_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --yes --win --abort --continue"
+_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --yes --win --here --worktrees --abort --continue"
 
 _git_ent_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
 
@@ -58,11 +58,12 @@ ent() {
 }
 
 # ---------- prompt ----------
-# __ent_in_ent: true when an ent's .bare folder sits above the current folder.
+# __ent_in_ent: true when an ent root sits above the current folder: both .bare
+# (the git database) and the .git pointer file, so a stray .bare does not count.
 # Uses only shell builtins (no processes), so prompts outside an ent cost nothing.
 __ent_in_ent() {
   local d="$PWD"
-  while [[ -n "$d" ]]; do [[ -d "$d/.bare" ]] && return 0; d="${d%/*}"; done
+  while [[ -n "$d" ]]; do [[ -d "$d/.bare" && -f "$d/.git" ]] && return 0; d="${d%/*}"; done
   return 1
 }
 

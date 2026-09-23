@@ -26,7 +26,9 @@ tools never wander into a neighbour.
 **Requirements:** bash 3.2+ and git 2.20+, which is already what you have with
 macOS, any Linux, and Git for Windows (Git Bash). Tested on Apple's bash 3.2
 with git 2.39, and on bash 5.3 with git 2.55. Recognizing squash merges by
-content during `sync` needs git 2.38+; older git skips just that check.
+content during `sync` needs git 2.38+; older git skips just that check, and
+`ent init --here` needs git 2.29+ only when it has to keep worktrees the repo
+already had.
 
 ## Install
 
@@ -68,6 +70,7 @@ file it recorded, and leaves your ents alone.
 ent init my-app                    # new repo: my-app/.bare, my-app/main/core
 ent init git@host:org/repo.git     # from a remote
 ent init ../old-clone new-ent      # from an existing clone (left untouched)
+ent init --here                    # turn the repo you are in into an ent, in place
 
 ent branch feature/x               # branches/feature/x/core, cut from where you stand
 ent twig db                        # inside feature/x: branch twigs/feature/x/db
@@ -81,9 +84,81 @@ ent rm feature/x -r                # remove a branch and its twigs (asks first)
 ent help [verb]                    # every verb and flag
 ```
 
+## Adopting a repo you already have: `ent init --here`
+
+`ent init <path> <dir>` copies from a clone and leaves it alone. `ent init --here`
+does the opposite: it converts the repo in place, so the folder keeps its name
+and everything in it comes along.
+
+```
+before                       after
+my-app/                      my-app/
+  .git/          (dir)         .bare/         the git database, now bare
+  src/                         .git           one line: "gitdir: ./.bare"
+  node_modules/  (ignored)     main/
+  .env           (ignored)       core/        src/, node_modules/, .env, …
+  README.md
+```
+
+Ignored files come too. `node_modules` and `.env` exist only on your disk, so a
+conversion that re-checked-out the tree would lose them; this one moves the
+files it finds instead. Your commits, branches, tags, stash, reflog, hooks,
+remotes and upstream tracking are all in `.git`, which is renamed rather than
+rebuilt, so they survive untouched.
+
+It asks for a clean tree, a branch checked out, and no submodules. "Clean" here
+means no changes to files git already tracks: commit or stash those first.
+
+Untracked files -- files git has never been told about, and that `.gitignore`
+does not cover -- do come along, but ent lists them and asks first:
+
+```
+'my-app' has 2 untracked file(s):
+    notes.txt
+    scratch/try.sql
+They would move into main/core/ with everything else and stay untracked.
+Carry them along? [y/N]
+```
+
+Say no and nothing is touched. `-y` answers yes, and `-n` lists them and asks
+nothing. Ignored files are never asked about: `.gitignore` already said what
+they are.
+
+Run it with `-n` first to see what would move without changing anything.
+
+If you are standing on a branch that is not the repo's default, both get a
+folder: the default is checked out fresh at `main/core`, and the branch you were
+on keeps your files at `branches/<branch>/core`. Check out the default branch
+first if you would rather start with just that one.
+
+If the repo already has other `git worktree`s, ent asks what to do with them:
+**move** them into a new `<name>-ent` beside the original, each at
+`branches/<branch>/core`; **drop** those worktree folders, keeping their
+branches, and convert in place; or **cancel**. `--worktrees move|drop` answers
+without asking. Whichever you pick, nothing happens until you answer the final
+`Convert ...?` — the folders **drop** would remove are listed there first, so
+saying no really does leave everything alone.
+
+**move** cannot keep a worktree that lives *inside* the repo being converted
+(`git worktree add ./sub`): the conversion moves the repo's contents, which
+would carry that folder off and break its registration. ent refuses and says
+so; move it elsewhere first, or choose **drop**.
+
+Nothing is deleted. If a step fails, ent rolls the conversion back by itself and
+tells you whether that worked. A kill or a power cut is the one thing no rollback
+survives, so before touching anything it writes `.ent-convert-recovery.sh` into
+the repo — the undo, already filled in for that folder. It is removed once the
+conversion lands.
+
+On Windows, close editors and pause OneDrive first: moving a folder is a rename,
+and an open handle blocks it.
+
 ## How branches relate
 
-- A **branch** always has **main** as its parent. `ent branch <name>` cuts it from
+- A **branch** always has **main** as its parent *for merging*: `ent branch
+  merge` sends it into main. On disk it is a different story -- branches sit
+  beside `main` under the ent root, not inside it, which is how `ent list` draws
+  them and what `ent up` and `ent down` follow. `ent branch <name>` cuts it from
   the branch or twig you are standing in (main when you are at the ent root), or
   from `--from <base>`. The name is used exactly as typed.
 - A **twig** belongs to the branch it was made from. A twig `db` of branch
@@ -103,6 +178,11 @@ ent help [verb]                    # every verb and flag
      Folders with uncommitted changes are skipped; conflicts are left in place
      and listed. A branch with an unfinished merge shows as `[MERGING]` in
      `ent list` and as `mainb|MERGING` in the prompt until you finish or abort it.
+- A branch can end up with **no folder** — you deleted it by hand, or the branch
+  was made with plain git. `ent list` marks it `[no worktree]`, and `ent go`
+  refuses it rather than sending your shell somewhere that is not there. Run
+  `ent branch <name>` on it to build the folder back: because the branch already
+  exists, that adopts it instead of refusing.
 
 ## Looking around: `ent status` and `ent log`
 
@@ -182,5 +262,14 @@ Two conventions run through the code:
 ## Developing
 
 - `bash ent.test.sh` builds throwaway ents in a temp folder and runs every verb.
-  Run it under both `/bin/bash` (3.2) and a modern bash before pushing.
+- A few behaviours genuinely differ between Windows and the Unixes (how a folder
+  path is spelled, and what counts as a link), so those tests come in pairs and
+  each half runs only where it applies. The other half prints `SKIP`, and the
+  last line counts them: `220 checks, 3 skipped, ALL PASS`. A skip is never
+  counted as a pass.
+- `.github/workflows/test.yml` runs the suite on every push against macOS with
+  Apple's `/bin/bash`, which is bash 3.2 and the oldest ent supports; Linux with
+  bash 5; and Windows with Git Bash. That is where 3.2 and BSD-tool
+  compatibility is actually checked, since most machines only have one of the
+  three.
 - Re-run `./install.sh` after editing to update your installed copy.
