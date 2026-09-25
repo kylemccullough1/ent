@@ -68,13 +68,25 @@ _view_start() {
 # whole screen first (\033[2J) would leave it blank for an instant on every keypress,
 # which reads as flicker.
 VIEW_CHROME=3              # title + tab bar + blank line, above the body
+VIEW_LEFT=0                # guard: _view_leave runs only once per session
+
+# _view_mouse_off: disable any mouse-reporting mode a previous program may have left on.
+# (Windows Terminal + Git Bash can inherit these from another TUI.)
+_view_mouse_off() {
+  printf '\033[?1003l\033[?1002l\033[?1000l\033[?1006l\033[?1015l'
+}
 
 _view_screen() {
   local title="$1" render="$2"
   local sel="${3:-0}" top=0 rows cols lines_count key rest redraw=1 page
   local -a body
 
-  trap '_view_leave' EXIT INT TERM
+  local saved_tty=""
+  [[ -t 0 ]] && saved_tty="$(stty -g 2>/dev/null)" || true
+  trap '_view_leave "$saved_tty"' EXIT INT TERM
+  VIEW_LEFT=0
+
+  _view_mouse_off
   printf '\033[?1049h\033[?25l'          # alternate screen, hide cursor
 
   while true; do
@@ -128,7 +140,7 @@ _view_screen() {
       q)       break ;;
     esac
   done
-  _view_leave
+  _view_leave "$saved_tty"
   trap - EXIT INT TERM
 }
 
@@ -177,4 +189,17 @@ _view_keybar() {
     "tab/shift-tab worktree   j/k or arrows scroll   space/b page   g/G top/bottom   r reload   q quit  [$((sel + 1))/${#VIEW_BRANCHES[@]}  $where]"
 }
 
-_view_leave() { printf '\033[?25h\033[?1049l'; }
+# _view_leave: restore everything the viewer may have changed.
+_view_leave() {
+  local saved_tty="${1:-}"
+  (( VIEW_LEFT )) && return
+  VIEW_LEFT=1
+
+  printf '\033[?25h\033[?1049l'          # show cursor, leave alternate screen
+  _view_mouse_off
+  printf '\033[0m'                       # reset SGR attributes/colors
+
+  if [[ -n "$saved_tty" && -t 0 ]]; then
+    stty "$saved_tty" 2>/dev/null || stty sane 2>/dev/null || true
+  fi
+}
