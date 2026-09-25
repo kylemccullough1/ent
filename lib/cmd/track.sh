@@ -12,6 +12,7 @@ cmd_track() {
   local branch
   [[ -n "$REMOTE" ]] || usage_die "track [<branch>] --remote <remote-branch>"
   branch="$(arg 1)"
+  [[ -z "$(arg 2)" ]] || usage_die "track [<branch>] --remote <remote-branch>"
   if [[ -z "$branch" ]]; then
     branch="$(ent_branch_of_cwd 2>/dev/null)" || die "track --remote needs a branch name when outside a branch"
   fi

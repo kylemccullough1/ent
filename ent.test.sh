@@ -195,6 +195,9 @@ expect_fail "track missing remote" "remote branch 'nonexistent' not found" ent "
 step "track fails for missing local branch"
 expect_fail "track missing local" "branch 'nonexistent' not found" ent "$T/g1" track nonexistent --remote feature/remote-only
 
+step "track rejects extra positional arguments"
+expect_fail "track extra arg" "usage" ent "$T/g1" track feature/ok extra --remote feature/remote-only
+
 step "path resolution (library) from inside an ent"
 cd "$T/g1/main/core"
 source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1

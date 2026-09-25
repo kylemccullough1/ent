@@ -26,20 +26,20 @@ _ent_flags=(--dry-run --verbose --quiet --help --version --recursive --force --f
 _ent() {
   if [[ "$PREFIX" == -* ]]; then compadd -- $_ent_flags; return; fi
   if (( CURRENT == 2 )); then compadd -- $_ent_verbs; return; fi
-  local -a branches
-branches=(${(f)"$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)"})
-remote_branches=(${(f)"$(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's|^origin/||')"})
-case "${words[2]}" in
-  branch)
-    case "${words[CURRENT-1]}" in
-      --from)  compadd -- $branches ;;
-      --remote) compadd -- $remote_branches ;;
-      *)       (( CURRENT == 3 )) && compadd -- merge ;;
-    esac ;;
-  rm|path|go|sync|track) compadd -- $branches ;;
-  twig)            [[ "${words[CURRENT-1]}" == --from ]] && compadd -- $branches ;;
-  help)            compadd -- $_ent_verbs merge ;;
-esac
+  local -a branches remote_branches
+  branches=(${(f)"$(git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)"})
+  remote_branches=(${(f)"$(git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's|^origin/||')"})
+  case "${words[2]}" in
+    branch)
+      case "${words[CURRENT-1]}" in
+        --from)   compadd -- $branches ;;
+        --remote) compadd -- $remote_branches ;;
+        *)        (( CURRENT == 3 )) && compadd -- merge ;;
+      esac ;;
+    rm|path|go|sync|track) compadd -- $branches ;;
+    twig)                 [[ "${words[CURRENT-1]}" == --from ]] && compadd -- $branches ;;
+    help)                 compadd -- $_ent_verbs merge ;;
+  esac
 }
 
 # `git ent <TAB>`: zsh's git completion calls _git-<cmd> for commands it is told about.
