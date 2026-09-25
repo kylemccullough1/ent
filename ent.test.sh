@@ -55,6 +55,7 @@ step "init from a URL"
 mkdir "$T/src"; (cd "$T/src" && git init -q -b main . && echo hi >README.md && git add . && git commit -qm init \
   && git checkout -q -b feature/remote-only && echo r >r.txt && git add . && git commit -qm remote \
   && git checkout -q -b defect/remote-only && echo d >d.txt && git add . && git commit -qm defect \
+  && git checkout -q -b remote-only && echo n >n.txt && git add . && git commit -qm remote-only \
   && git checkout -q main)
 SRC="$(Norm "$T/src")"; URL="file:///${SRC#/}"; [[ "$SRC" == /* ]] && URL="file://$SRC"
 ent "$T" init "$URL" g1 >/dev/null 2>&1
@@ -135,7 +136,7 @@ step "branch without a name or flags fails"
 expect_fail "branch without name" "usage" ent "$T/g1" branch
 
 step "branch --remote default name respects branchPattern"
-expect_fail "remote default name pattern reject" "does not match" ent "$T/g1" branch --remote defect/remote-only
+expect_fail "remote default name pattern reject" "does not match" ent "$T/g1" branch --remote remote-only
 
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
