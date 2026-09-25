@@ -10,8 +10,24 @@ twig <name> [--from <branch>]          create a twig of the current branch
 EOF
 }
 
+parse_twig_args() {
+  local i=0 new_args=()
+  FROM=""
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --from)   i=$((i+1)); FROM="${ARGS[$i]:-}"; [[ -n "$FROM" ]] || die "--from requires a value" ;;
+      -*)       die "unknown twig option: $a" ;;
+      *)        new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 cmd_twig() {
   ensure_ent
+  parse_twig_args
   local name parent branch container core_dir
   name="$(arg 1)"
   [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "twig <name> [--from <branch>]"

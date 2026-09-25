@@ -53,7 +53,7 @@ cmd_help() {
 }
 
 main() {
-  parse_args "$@"
+  parse_globals "$@"
   local verb; verb="$(arg 0)"
   # `branch merge` is its own verb for help and dispatch
   if [[ "$verb" == branch && "$(arg 1)" == merge ]]; then verb=merge; fi

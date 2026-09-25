@@ -10,6 +10,22 @@ branch <name> [--from <base> | --remote <remote-branch>]
 EOF
 }
 
+parse_branch_args() {
+  local i=0 new_args=()
+  FROM=""; REMOTE=""
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --from)   i=$((i+1)); FROM="${ARGS[$i]:-}"; [[ -n "$FROM" ]] || die "--from requires a value" ;;
+      --remote) i=$((i+1)); REMOTE="${ARGS[$i]:-}"; [[ -n "$REMOTE" ]] || die "--remote requires a value" ;;
+      -*)       die "unknown branch option: $a" ;;
+      *)        new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 # check_new_name <branch>: refuse names that exist or collide with ent's own folders.
 # `twigs/...` is where twig branches live, so a branch may not claim that namespace.
 check_new_name() {
@@ -39,6 +55,7 @@ branch_adopt() {
 
 cmd_branch() {
   ensure_ent
+  parse_branch_args
   local branch pat base core_dir track_arg
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base> | --remote <remote-branch>]"

@@ -101,8 +101,24 @@ cmd_where() {
   return 0
 }
 
+parse_path_args() {
+  local i=0 new_args=()
+  WIN=0
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --win) WIN=1 ;;
+      -*)    die "unknown path option: $a" ;;
+      *)     new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 cmd_path() {
   ensure_ent
+  parse_path_args
   local branch p
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "path <branch> [--win]"

@@ -51,8 +51,25 @@ merge_abort_or_continue() {
   return 0
 }
 
+parse_merge_args() {
+  local i=0 new_args=()
+  MERGE_ABORT=0; MERGE_CONTINUE=0
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --abort)    MERGE_ABORT=1 ;;
+      --continue) MERGE_CONTINUE=1 ;;
+      -*)         die "unknown branch merge option: $a" ;;
+      *)          new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 cmd_merge() {
   ensure_ent
+  parse_merge_args
   if merge_abort_or_continue; then return 0; fi
   local src target
   [[ -z "$(arg 2)" ]] || usage_die "branch merge [-y]   (merges into the parent; no target)"

@@ -5,7 +5,23 @@ destroy <dir> [-f]                     delete a whole ent (asks you to type its 
 EOF
 }
 
+parse_destroy_args() {
+  local i=0 new_args=()
+  FORCE=0
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --force|-f) FORCE=1 ;;
+      -*)         die "unknown destroy option: $a" ;;
+      *)          new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 cmd_destroy() {
+  parse_destroy_args
   local dir a
   dir="$(arg 1)"
   [[ -n "$dir" && -z "$(arg 2)" ]] || usage_die "destroy <dir> [-f]"

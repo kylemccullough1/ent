@@ -57,8 +57,25 @@ rm_one() {
   return 0
 }
 
+parse_rm_args() {
+  local i=0 new_args=()
+  FORCE=0; RECURSIVE=0
+  while (( i < ${#ARGS[@]} )); do
+    local a="${ARGS[$i]}"
+    case "$a" in
+      --force|-f)   FORCE=1 ;;
+      --recursive|-r) RECURSIVE=1 ;;
+      -*)           die "unknown rm option: $a" ;;
+      *)            new_args+=("$a") ;;
+    esac
+    i=$((i+1))
+  done
+  ARGS=("${new_args[@]}")
+}
+
 cmd_rm() {
   ensure_ent
+  parse_rm_args
   cd "$ENT"   # never stand inside a worktree that is about to be removed
   local branch
   branch="$(arg 1)"

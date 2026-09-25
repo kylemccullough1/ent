@@ -166,6 +166,9 @@ expect_fail "branch --from remote ref" "not found locally" ent "$T/g1" branch fr
 step "branch --from and --remote are mutually exclusive"
 expect_fail "branch --from --remote conflict" "mutually exclusive" ent "$T/g1" branch conflict --from main --remote feature/remote-only
 
+step "branch rejects unknown flags"
+expect_fail "branch unknown option" "unknown branch option" ent "$T/g1" branch foo --bogus
+
 step "canopy config key replaces ent.main"
 check "main" "$(git -C "$T/g1/.bare" config ent.canopy)" "canopy recorded"
 [[ -z "$(git -C "$T/g1/.bare" config ent.main 2>/dev/null || true)" ]] && pass "ent.main removed" || fail "ent.main removed"
