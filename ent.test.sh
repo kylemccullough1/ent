@@ -458,9 +458,12 @@ step "viewer leave resets mouse modes, cursor, alternate screen, and attributes"
   source "$(dirname "$G")/lib/state.sh"
   source "$(dirname "$G")/lib/view.sh"
   out="$(_view_leave)"; ok=1
-  for seq in $'\033[?25h' $'\033[?1049l' $'\033[?1003l' $'\033[?1002l' $'\033[?1000l' $'\033[?1006l' $'\033[?1015l' $'\033[0m'; do
-    case "$out" in *"$seq"*) ;; *) echo "  missing $(printf '%q' "$seq")" >&2; ok=0 ;; esac
+  for seq in $'\033[?25h' $'\033[?1049l' $'\033[?1003l' $'\033[?1002l' $'\033[?1000l' $'\033[?1006l' $'\033[?1015l' $'\033[?1005l' $'\033[0m'; do
+    [[ "$out" == *"$seq"* ]] || { echo "  missing $(printf '%q' "$seq")" >&2; ok=0; }
   done
+  # SGR reset should happen while still on the alternate screen.
+  before_sgr="${out%%$'\033[0m'*}"
+  [[ "$before_sgr" == *$'\033[?1049l'* ]] && { echo "  SGR reset happens after alternate screen leave" >&2; ok=0; }
   # Idempotence must be checked in the same shell because command substitutions fork.
   tmp="$(mktemp -d)"
   _view_leave > "$tmp/first"; _view_leave > "$tmp/second"
@@ -492,7 +495,8 @@ if command -v script >/dev/null 2>&1; then
   case "$scr" in *"tab/shift-tab"*) pass "viewer draws its key bar" ;; *) fail "viewer draws its key bar" ;; esac
   case "$scr" in *$'\033[?1049h'*) pass "viewer uses the alternate screen" ;; *) fail "viewer uses the alternate screen" ;; esac
   case "$scr" in *$'\033[?1049l'*) pass "viewer restores the screen on quit" ;; *) fail "viewer restores the screen on quit" ;; esac
-  case "$scr" in *$'\033[?1003h'*) fail "viewer enables mouse mode" ;; *) pass "viewer does not enable mouse mode" ;; esac
+  mouse_on=$'\033[?1003h'
+  case "$scr" in *"$mouse_on"*) fail "viewer enables mouse mode" ;; *) pass "viewer does not enable mouse mode" ;; esac
   case "$scr" in *$'\033[7m'" feature/456"*) pass "viewer opens on the worktree you are in" ;; *) fail "viewer opens on the worktree you are in" ;; esac
   (cd "$T/g1/main/core" && printf 'jjGq' | script -q /dev/null "$BASH" "$G" log >/dev/null 2>&1) \
     && pass "viewer scroll keys exit cleanly" || fail "viewer scroll keys exit cleanly"

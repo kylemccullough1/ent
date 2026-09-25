@@ -73,7 +73,7 @@ VIEW_LEFT=0                # guard: _view_leave runs only once per session
 # _view_mouse_off: disable any mouse-reporting mode a previous program may have left on.
 # (Windows Terminal + Git Bash can inherit these from another TUI.)
 _view_mouse_off() {
-  printf '\033[?1003l\033[?1002l\033[?1000l\033[?1006l\033[?1015l'
+  printf '\033[?1003l\033[?1002l\033[?1000l\033[?1006l\033[?1015l\033[?1005l'
 }
 
 _view_screen() {
@@ -83,8 +83,9 @@ _view_screen() {
 
   local saved_tty=""
   [[ -t 0 ]] && saved_tty="$(stty -g 2>/dev/null)" || true
-  trap '_view_leave "$saved_tty"' EXIT INT TERM
   VIEW_LEFT=0
+  trap '_view_leave "$saved_tty"; exit 141' PIPE
+  trap '_view_leave "$saved_tty"' EXIT INT TERM
 
   _view_mouse_off
   printf '\033[?1049h\033[?25l'          # alternate screen, hide cursor
@@ -141,7 +142,7 @@ _view_screen() {
     esac
   done
   _view_leave "$saved_tty"
-  trap - EXIT INT TERM
+  trap - EXIT INT TERM PIPE
 }
 
 # _view_draw <text>: one row, clearing anything the previous frame left on it.
@@ -195,9 +196,9 @@ _view_leave() {
   (( VIEW_LEFT )) && return
   VIEW_LEFT=1
 
-  printf '\033[?25h\033[?1049l'          # show cursor, leave alternate screen
-  _view_mouse_off
   printf '\033[0m'                       # reset SGR attributes/colors
+  _view_mouse_off
+  printf '\033[?25h\033[?1049l'          # show cursor, leave alternate screen
 
   if [[ -n "$saved_tty" && -t 0 ]]; then
     stty "$saved_tty" 2>/dev/null || stty sane 2>/dev/null || true
