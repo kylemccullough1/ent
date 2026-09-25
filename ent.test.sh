@@ -42,6 +42,36 @@ windows_only() { if (( ON_WINDOWS )); then return 0; fi; skip "$1" "windows only
 # `pwd -P` resolves it, which is what ent_root walks.
 mklink_j() { MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$1")" "$(cygpath -w "$2")" >/dev/null 2>&1; }
 
+step "node tree loads from .bare/ent.json"
+source "$(dirname "$G")/lib/core.sh" >/dev/null 2>&1
+source "$(dirname "$G")/lib/tree.sh" >/dev/null 2>&1
+ent "$T" init tree-test >/dev/null 2>&1
+ENT="$(Norm "$T/tree-test")"
+cat >"$ENT/.bare/ent.json" <<'JSON'
+{
+  "canopy": "main",
+  "nodes": {
+    "main": {
+      "type": "canopy",
+      "parent": null,
+      "children": ["feature/x"],
+      "worktree": "main/core"
+    },
+    "feature/x": {
+      "type": "branch",
+      "parent": "main",
+      "children": [],
+      "worktree": "branches/feature/x/core"
+    }
+  }
+}
+JSON
+tree_load
+[[ "$(tree_canopy)" == "main" ]] && pass "tree_canopy" || fail "tree_canopy"
+tree_parent_of "feature/x"; [[ "$REPLY" == "main" ]] && pass "tree_parent_of" || fail "tree_parent_of"
+tree_children_of "main"; [[ "${REPLY_LIST[*]}" == "feature/x" ]] && pass "tree_children_of" || fail "tree_children_of"
+tree_worktree_of "feature/x"; [[ "$REPLY" == "branches/feature/x/core" ]] && pass "tree_worktree_of" || fail "tree_worktree_of"
+
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
 [[ -d "$T/fresh/.bare" && -d "$T/fresh/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
