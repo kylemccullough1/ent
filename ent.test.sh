@@ -103,6 +103,22 @@ ent "$T/g1/main/core" branch prefix/main-name >/dev/null
 [[ -d "$T/g1/branches/prefix/main-name/core" ]] && pass "branch from main with namespace container" || fail "branch from main with namespace container"
 check "prefix/main-name" "$(git -C "$T/g1/branches/prefix/main-name/core" branch --show-current)" "branch from main with namespace name"
 
+step "branch from remote with --remote"
+ent "$T/g1" branch imported --remote feature/remote-only >/dev/null
+[[ -d "$T/g1/branches/imported/core" ]] && pass "remote branch container created" || fail "remote branch container"
+check "imported" "$(git -C "$T/g1/branches/imported/core" branch --show-current)" "remote branch checked out"
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/imported/core" rev-parse --abbrev-ref '@{u}')" "upstream set to remote"
+[[ -f "$T/g1/branches/imported/core/r.txt" ]] && pass "remote branch content present" || fail "remote branch content present"
+
+step "branch --remote with missing remote branch fails"
+expect_fail "branch --remote missing" "remote branch 'nonexistent' not found" ent "$T/g1" branch wont-work --remote nonexistent
+
+step "branch --from is local-only"
+expect_fail "branch --from remote ref" "not found locally" ent "$T/g1" branch from-remote --from feature/remote-only
+
+step "branch --from and --remote are mutually exclusive"
+expect_fail "branch --from --remote conflict" "mutually exclusive" ent "$T/g1" branch conflict --from main --remote feature/remote-only
+
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
 

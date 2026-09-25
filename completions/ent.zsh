@@ -20,7 +20,7 @@ ent() {
 
 # ---------- completion ----------
 _ent_verbs=(init branch twig rm sync list status log path up down go destroy help)
-_ent_flags=(--dry-run --verbose --quiet --help --version --recursive --force --from --yes --win --here --worktrees --abort --continue)
+_ent_flags=(--dry-run --verbose --quiet --help --version --recursive --force --from --remote --yes --win --here --worktrees --abort --continue)
 
 # _ent: completes `ent ...`; words[1] is the command, words[2] the verb.
 _ent() {

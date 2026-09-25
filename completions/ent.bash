@@ -5,7 +5,7 @@
 # `git <subcommand> ...`, so defining _git_ent is all it takes to complete `git ent <TAB>`.
 
 _git_ent_verbs="init branch twig rm sync list status log path up down go destroy help"
-_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --yes --win --here --worktrees --abort --continue"
+_git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --remote --yes --win --here --worktrees --abort --continue"
 
 _git_ent_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
 
@@ -21,7 +21,7 @@ _git_ent_complete() {
     COMPREPLY=( $(compgen -W "$_git_ent_opts" -- "$cur") ); return
   fi
   case "$prev" in
-    --from|rm|path|merge|destroy|help)
+    --from|--remote|rm|path|merge|destroy|help)
       [[ "$prev" == help ]] && { COMPREPLY=( $(compgen -W "$_git_ent_verbs" -- "$cur") ); return; }
       COMPREPLY=( $(compgen -W "$(_git_ent_branches)" -- "$cur") ); return ;;
   esac

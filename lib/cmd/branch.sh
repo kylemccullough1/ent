@@ -1,9 +1,11 @@
 # ent branch: create a top-level branch under <ent>/branches/.
 
 help_branch() { cat <<'EOF'
-branch <name> [--from <base>]          create a branch at branches/<name>/core
+branch <name> [--from <base> | --remote <remote-branch>]
+  create a branch at branches/<name>/core
   Cut from the branch or twig you are standing in (main from the ent root),
-  or from --from <base>. Its parent is always main.
+  from --from <base> (another local branch), or from --remote <remote-branch>
+  on origin. --remote sets the upstream to origin/<remote-branch>.
   The name is used exactly as given and must match branchPattern if .entrc sets one.
 EOF
 }
@@ -37,27 +39,34 @@ branch_adopt() {
 
 cmd_branch() {
   ensure_ent
-  local branch pat base core_dir
+  local branch pat base core_dir track_arg
   branch="$(arg 1)"
-  [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base>]"
+  [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base> | --remote <remote-branch>]"
   # An existing branch with no worktree is adopted rather than refused. This
   # comes before the twigs/ guard: that guard stops you CREATING a twig branch
   # by hand, but an existing one deserves its folder back like any other.
   if has_local "$branch" && ! wt_path_of "$branch"; then branch_adopt "$branch"; return; fi
   [[ "$branch" != twigs/* ]] || die "'twigs/' is reserved for twig branches; pick another name"
+  [[ -z "$FROM" || -z "$REMOTE" ]] || die "--from and --remote are mutually exclusive"
   check_new_name "$branch"
   pat="$(branch_pattern)"
   if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi
-  if [[ -n "$FROM" ]]; then
-    base="$FROM"; has_local "$base" || has_remote "$base" || die "base branch '$base' not found"
+  if [[ -n "$REMOTE" ]]; then
+    has_remote "$REMOTE" || die "remote branch '$REMOTE' not found"
+    base="origin/$REMOTE"
+    track_arg="--track"
+  elif [[ -n "$FROM" ]]; then
+    has_local "$FROM" || die "base branch '$FROM' not found locally"
+    base="$FROM"
+    track_arg="--no-track"
   else
     base="$(ent_branch_of_cwd 2>/dev/null)" || base="$S_MAIN"
+    track_arg="--no-track"
   fi
-  has_local "$base" || base="origin/$base"
   core_dir="$ENT/branches/$branch/core"
   [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
   run mkdir -p "$ENT/branches/$branch/twigs"
-  run git -C "$ENT" worktree add --no-track -b "$branch" "$core_dir" "$base"
+  run git -C "$ENT" worktree add "$track_arg" -b "$branch" "$core_dir" "$base"
   worktree_bare_guard "$core_dir"
   emit_path "$core_dir" "Created branch $branch at $core_dir"
 }

@@ -73,6 +73,7 @@ ent init ../old-clone new-ent      # from an existing clone (left untouched)
 ent init --here                    # turn the repo you are in into an ent, in place
 
 ent branch feature/x               # branches/feature/x/core, cut from where you stand
+ent branch feature/x --remote feature/x  # from origin/feature/x, tracking it
 ent twig db                        # inside feature/x: branch twigs/feature/x/db
 ent up / ent down db / ent go feature/x
 ent list                           # the whole tree
@@ -159,8 +160,9 @@ and an open handle blocks it.
   merge` sends it into main. On disk it is a different story -- branches sit
   beside `main` under the ent root, not inside it, which is how `ent list` draws
   them and what `ent up` and `ent down` follow. `ent branch <name>` cuts it from
-  the branch or twig you are standing in (main when you are at the ent root), or
-  from `--from <base>`. The name is used exactly as typed.
+  the branch or twig you are standing in (main when you are at the ent root),
+  from `--from <base>` (another local branch), or from `--remote <remote-branch>`
+  on origin, which sets the upstream. The name is used exactly as typed.
 - A **twig** belongs to the branch it was made from. A twig `db` of branch
   `feature/x` is the branch `twigs/feature/x/db`, and its parent is recorded in
   `.bare/config` as `branch.<twig>.entParent`. That record is local, never pushed.
