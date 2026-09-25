@@ -9,30 +9,32 @@
 # so callers can skip a $(...) subshell. On Git Bash for Windows every
 # subshell is a slow process start, and `list` does many lookups.
 
+_ENT_STATE_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! declare -f tree_load >/dev/null 2>&1; then source "$_ENT_STATE_LIB/tree.sh"; fi
+
 S_ENT=""                            # ent root the snapshot was read from
-S_MAIN="main"                       # default branch (ent.main)
+S_MAIN="main"                       # default branch (ent.main / ent.canopy)
 S_CFG_KEYS=()    S_CFG_VALS=()      # ent.* settings from .bare/config, keys lowercase
-S_PARENT_KEYS=() S_PARENT_VALS=()   # twig -> parent (branch.<twig>.entParent), sorted by twig
 S_LOCAL=()                          # local branch names, sorted
 S_REMOTE=()                         # remote-tracking names, e.g. origin/main
-S_WT_BRANCH=()   S_WT_PATH=()       # branch -> path of the worktree it is checked out in
+S_WT_BRANCH=()   S_WT_PATH=()       # branch -> path from git worktree list (for cwd resolution)
 S_STATE_PATH=()  S_STATE_VAL=()     # worktree path -> unfinished operation (MERGING, ...)
 REPLY="" REPLY_LIST=()
 
 load_state() {
-  S_ENT="$ENT" S_MAIN="main"
-  S_CFG_KEYS=() S_CFG_VALS=() S_PARENT_KEYS=() S_PARENT_VALS=()
+  S_ENT="$ENT"
+  S_CFG_KEYS=() S_CFG_VALS=()
   S_LOCAL=() S_REMOTE=() S_WT_BRANCH=() S_WT_PATH=() S_STATE_PATH=() S_STATE_VAL=()
   local key val ref path=""
 
-  # 1. settings and twig parents (sorted so children come out in name order)
+  tree_load
+  S_MAIN="$(tree_canopy)"
+
+  # 1. settings (so state_cfg still works for arbitrary ent.* keys)
   while read -r key val; do
-    case "$key" in
-      ent.*)              S_CFG_KEYS+=("${key#ent.}"); S_CFG_VALS+=("$val") ;;
-      branch.*.entparent) key="${key#branch.}"; S_PARENT_KEYS+=("${key%.entparent}"); S_PARENT_VALS+=("$val") ;;
-    esac
-  done < <(git -C "$ENT" config --get-regexp '^(ent\.|branch\..*\.entparent$)' 2>/dev/null | sort)
-  if state_cfg main && [[ -n "$REPLY" ]]; then S_MAIN="$REPLY"; fi
+    [[ "$key" == ent.* ]] || continue
+    S_CFG_KEYS+=("${key#ent.}"); S_CFG_VALS+=("$val")
+  done < <(git -C "$ENT" config --get-regexp '^ent\.' 2>/dev/null | sort)
 
   # 2. branches (for-each-ref sorts by name)
   while read -r ref; do
@@ -43,7 +45,8 @@ load_state() {
     esac
   done < <(git -C "$ENT" for-each-ref --format='%(refname)' refs/heads refs/remotes)
 
-  # 3. worktrees. git prints absolute paths with symlinks already resolved.
+  # 3. worktrees from git (still needed to resolve cwd -> branch accurately,
+  # especially while the node tree is being populated by older commands).
   while IFS= read -r ref; do
     case "$ref" in
       "worktree "*) path="${ref#worktree }" ;;
@@ -104,34 +107,21 @@ state_cfg() {
 # parent_of <branch>: REPLY = the twig's parent, or empty for main and branches.
 parent_of() {
   state_ready
-  local i=0
-  while (( i < ${#S_PARENT_KEYS[@]} )); do
-    if [[ "${S_PARENT_KEYS[$i]}" == "$1" ]]; then REPLY="${S_PARENT_VALS[$i]}"; return 0; fi
-    i=$((i + 1))
-  done
-  REPLY=""
+  tree_parent_of "$1"; REPLY="$REPLY"
 }
 
-# wt_path_of <branch>: REPLY = the branch's worktree path. Returns 1 if not checked out.
+# wt_path_of <branch>: REPLY = the branch's absolute worktree path.
+# Returns 1 if the branch is not managed by the node tree.
 wt_path_of() {
   state_ready
-  local i=0
-  while (( i < ${#S_WT_BRANCH[@]} )); do
-    if [[ "${S_WT_BRANCH[$i]}" == "$1" ]]; then REPLY="${S_WT_PATH[$i]}"; return 0; fi
-    i=$((i + 1))
-  done
-  REPLY=""; return 1
+  tree_worktree_of "$1" || { REPLY=""; return 1; }
+  REPLY="$ENT/$REPLY"
 }
 
-# children_of <branch>: REPLY_LIST = its twigs, in name order.
+# children_of <branch>: REPLY_LIST = its immediate children, in file order.
 children_of() {
   state_ready
-  local i=0
-  REPLY_LIST=()
-  while (( i < ${#S_PARENT_KEYS[@]} )); do
-    if [[ "${S_PARENT_VALS[$i]}" == "$1" ]]; then REPLY_LIST+=("${S_PARENT_KEYS[$i]}"); fi
-    i=$((i + 1))
-  done
+  tree_children_of "$1"; REPLY_LIST=("${REPLY_LIST[@]}")
 }
 
 # top_branches: REPLY_LIST = branches with no parent, excluding the default branch.

@@ -72,6 +72,13 @@ tree_parent_of "feature/x"; [[ "$REPLY" == "main" ]] && pass "tree_parent_of" ||
 tree_children_of "main"; [[ "${REPLY_LIST[*]}" == "feature/x" ]] && pass "tree_children_of" || fail "tree_children_of"
 tree_worktree_of "feature/x"; [[ "$REPLY" == "branches/feature/x/core" ]] && pass "tree_worktree_of" || fail "tree_worktree_of"
 
+step "state and paths resolve from the node tree"
+cd "$ENT/main/core"
+source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
+load_state
+[[ "$(ent_canopy)" == "main" ]] && pass "ent_canopy" || fail "ent_canopy"
+[[ "$(ent_core feature/x)" == "$ENT/branches/feature/x/core" ]] && pass "ent_core from tree" || fail "ent_core from tree"
+
 step "concurrent writes to ent.json do not corrupt the file"
 ENT="$(Norm "$T/tree-test")"
 for i in 1 2 3; do

@@ -60,10 +60,25 @@ ent_twigname() {
   if [[ "$1" == twigs/* ]]; then printf '%s' "${1##*/}"; else printf '%s' "$1"; fi
 }
 
+# ent_canopy: the default branch name for the current ent.
+ent_canopy() { state_ready; printf '%s' "$S_MAIN"; }
+
 # ent_container <branch>: the folder holding the branch's core/ and twigs/.
 ent_container() {
   state_ready
+  local rel
   if [[ "$1" == "$S_MAIN" ]]; then printf '%s/main' "$ENT"; return 0; fi
+  if tree_worktree_of "$1" 2>/dev/null && [[ -n "$REPLY" ]]; then
+    rel="$REPLY"
+    if [[ "$rel" == */core ]]; then
+      printf '%s/%s' "$ENT" "${rel%/core}"
+    else
+      printf '%s/%s' "$ENT" "$rel"
+    fi
+    return 0
+  fi
+  # Fallback for branches that exist in git but have not been recorded in the
+  # node tree yet.  This keeps older ents working until auto-adoption runs.
   parent_of "$1"
   if [[ -z "$REPLY" ]]; then
     printf '%s/branches/%s' "$ENT" "$1"
@@ -74,7 +89,14 @@ ent_container() {
 }
 
 # ent_core <branch>: the branch's checkout folder.
-ent_core() { printf '%s/core' "$(ent_container "$1")"; }
+ent_core() {
+  state_ready
+  if tree_worktree_of "$1" 2>/dev/null && [[ -n "$REPLY" ]]; then
+    printf '%s/%s' "$ENT" "$REPLY"
+    return 0
+  fi
+  printf '%s/core' "$(ent_container "$1")"
+}
 
 # ent_parent_core <branch>: the parent's core/, or the ent root for a top-level branch.
 ent_parent_core() {
