@@ -84,7 +84,7 @@ cmd_init() {
   run mkdir -p "$dir/main"
   run git -C "$ENT" worktree add "$dir/main/core" "$def"
   worktree_bare_guard "$dir/main/core"
-  run git -C "$ENT" config ent.main "$def"
+  run git -C "$ENT" config ent.canopy "$def"
 
   case "$OSTYPE" in msys*|cygwin*) note "Windows: deep paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
   emit_path "$dir/main/core" "Ent ready at $dir (default branch: $def)"

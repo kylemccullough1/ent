@@ -94,7 +94,7 @@ ent "$T" init fresh >/dev/null 2>&1
 [[ -d "$T/fresh/.bare" && -d "$T/fresh/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
 check "refs/heads/main" "$(git -C "$T/fresh" symbolic-ref HEAD)" "bare HEAD is main"
 check "main" "$(git -C "$T/fresh/main/core" branch --show-current)" "core is on main"
-check "main" "$(git -C "$T/fresh" config ent.main)" "ent.main is main"
+check "main" "$(git -C "$T/fresh" config ent.canopy)" "ent.canopy is main"
 ent "$T" init fresh >/dev/null 2>&1 && fail "init refuses non-empty dir" || pass "init refuses non-empty dir"
 expect_fail "init names the bad source" "'./nope' is neither" ent "$T" init ./nope
 
@@ -117,7 +117,7 @@ check "1" "$(git -C "$T/g2" show-ref --verify -q refs/heads/feature/local-only &
 step "init when origin default branch is not main"
 mkdir "$T/srcdev"; (cd "$T/srcdev" && git init -q -b develop . && echo d >d && git add . && git commit -qm dev)
 ent "$T" init "$T/srcdev" gdev >/dev/null 2>&1
-check "develop" "$(git -C "$T/gdev" config ent.main)" "ent.main recorded as develop"
+check "develop" "$(git -C "$T/gdev" config ent.canopy)" "ent.canopy recorded as develop"
 
 step "branch top-level branch"
 cd "$T/g1/main/core"
@@ -165,6 +165,10 @@ expect_fail "branch --from remote ref" "not found locally" ent "$T/g1" branch fr
 
 step "branch --from and --remote are mutually exclusive"
 expect_fail "branch --from --remote conflict" "mutually exclusive" ent "$T/g1" branch conflict --from main --remote feature/remote-only
+
+step "canopy config key replaces ent.main"
+check "main" "$(git -C "$T/g1/.bare" config ent.canopy)" "canopy recorded"
+[[ -z "$(git -C "$T/g1/.bare" config ent.main 2>/dev/null || true)" ]] && pass "ent.main removed" || fail "ent.main removed"
 
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
@@ -638,7 +642,7 @@ ent "$T/adopt" init --here -y >/dev/null 2>&1
 [[ -d "$T/adopt/.bare" && -d "$T/adopt/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
 check "gitdir: ./.bare" "$(cat "$T/adopt/.git")" ".git is the pointer file"
 check "main" "$(git -C "$T/adopt/main/core" branch --show-current)" "core is on main"
-check "main" "$(git -C "$T/adopt" config ent.main)" "ent.main recorded"
+check "main" "$(git -C "$T/adopt" config ent.canopy)" "ent.canopy recorded"
 check "" "$(git -C "$T/adopt/main/core" status --porcelain)" "converted worktree is clean"
 check "payload" "$(cat "$T/adopt/main/core/node_modules/x" 2>/dev/null)" "ignored node_modules moved"
 check "secret" "$(cat "$T/adopt/main/core/.env" 2>/dev/null)" "ignored .env moved"
@@ -686,7 +690,7 @@ ent "$T/onbranch" init --here -y >/dev/null 2>&1
 check "main" "$(git -C "$T/onbranch/main/core" branch --show-current)" "main/core is on the default branch"
 check "feature/x" "$(git -C "$T/onbranch/branches/feature/x/core" branch --show-current)" "current branch parked in its own folder"
 check "payload" "$(cat "$T/onbranch/branches/feature/x/core/node_modules/x" 2>/dev/null)" "ignored files went with the parked branch"
-check "main" "$(git -C "$T/onbranch" config ent.main)" "ent.main is the default, not the parked branch"
+check "main" "$(git -C "$T/onbranch" config ent.canopy)" "ent.canopy is the default, not the parked branch"
 [[ -d "$T/onbranch/branches/feature/x/twigs" ]] && pass "parked branch has a twigs sibling" || fail "parked branch twigs"
 check "1" "$(git -C "$T/onbranch" log --oneline feature/x | grep -c onbranch)" "parked branch kept its commits"
 
