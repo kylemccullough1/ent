@@ -135,9 +135,6 @@ expect_fail "branch --from without name" "usage" ent "$T/g1" branch --from main
 step "branch without a name or flags fails"
 expect_fail "branch without name" "usage" ent "$T/g1" branch
 
-step "branch --remote default name respects branchPattern"
-expect_fail "remote default name pattern reject" "does not match" ent "$T/g1" branch --remote remote-only
-
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
 
@@ -179,6 +176,9 @@ git add .entrc && git commit -qm "add entrc"
 expect_fail "pattern reject" "does not match" ent "$T/g1" branch defect/bad
 ent "$T/g1" branch feature/ok >/dev/null
 [[ -d "$T/g1/branches/feature/ok/core" ]] && pass "pattern allow" || fail "pattern allow"
+
+step "branch --remote default name respects branchPattern"
+expect_fail "remote default name pattern reject" "does not match" ent "$T/g1" branch --remote remote-only
 
 step "track sets upstream for an existing branch"
 ent "$T/g1" track feature/ok --remote feature/remote-only >/dev/null
