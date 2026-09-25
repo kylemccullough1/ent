@@ -11,3 +11,7 @@ branchPattern = ^(contributor/)?(feature|defect)/[A-Za-z0-9._-]+$
 # Extra branches `ent rm` refuses to remove, space-separated.
 # The default branch is always protected; this list only adds to it.
 protect = integration release
+
+# Commit message format used by this project.
+# Commits are prefixed with the current branch name.
+commitMessageFormat = {branch-name}: {commit message}
