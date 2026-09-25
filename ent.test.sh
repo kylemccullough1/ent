@@ -180,6 +180,21 @@ expect_fail "pattern reject" "does not match" ent "$T/g1" branch defect/bad
 ent "$T/g1" branch feature/ok >/dev/null
 [[ -d "$T/g1/branches/feature/ok/core" ]] && pass "pattern allow" || fail "pattern allow"
 
+step "track sets upstream for an existing branch"
+ent "$T/g1" track feature/ok --remote feature/remote-only >/dev/null
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/feature/ok/core" rev-parse --abbrev-ref '@{u}')" "track sets upstream"
+
+step "track without branch name uses current branch"
+cd "$T/g1/branches/feature/ok/core"
+ent "$T/g1/branches/feature/ok/core" track --remote feature/remote-only >/dev/null
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/feature/ok/core" rev-parse --abbrev-ref '@{u}')" "track current branch upstream"
+
+step "track fails for missing remote branch"
+expect_fail "track missing remote" "remote branch 'nonexistent' not found" ent "$T/g1" track feature/ok --remote nonexistent
+
+step "track fails for missing local branch"
+expect_fail "track missing local" "branch 'nonexistent' not found" ent "$T/g1" track nonexistent --remote feature/remote-only
+
 step "path resolution (library) from inside an ent"
 cd "$T/g1/main/core"
 source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
