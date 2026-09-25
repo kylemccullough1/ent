@@ -170,6 +170,18 @@ step "canopy config key replaces ent.main"
 check "main" "$(git -C "$T/g1/.bare" config ent.canopy)" "canopy recorded"
 [[ -z "$(git -C "$T/g1/.bare" config ent.main 2>/dev/null || true)" ]] && pass "ent.main removed" || fail "ent.main removed"
 
+step "logging writes to per-ent log"
+ENT="$(Norm "$T/g1")"
+ent "$T/g1" branch log-test >/dev/null 2>&1
+[[ -f "$ENT/.bare/ent.log" ]] && pass "per-ent log exists" || fail "per-ent log exists"
+grep -q "INFO" "$ENT/.bare/ent.log" && pass "info entries written" || fail "info entries written"
+
+step "global log catches messages outside an ent"
+HGLOBAL="$T/home-global"; mkdir -p "$HGLOBAL/.config"
+(cd "$T" && HOME="$HGLOBAL" "$BASH" "$G" unknown-verb >/dev/null 2>&1) || true
+[[ -f "$HGLOBAL/.config/ent/global.log" ]] && pass "global log exists" || fail "global log exists"
+grep -q "ERROR" "$HGLOBAL/.config/ent/global.log" && pass "global error written" || fail "global error written"
+
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
 

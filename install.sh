@@ -28,7 +28,7 @@ BIN="${BIN:-$HOME/.local/bin}"
 SHARE="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent"
 
 rm -rf "$SHARE"
-mkdir -p "$BIN" "$SHARE"
+mkdir -p "$BIN" "$SHARE" "${XDG_CONFIG_HOME:-$HOME/.config}/ent"
 cp -R "$HERE/lib" "$HERE/completions" "$SHARE/"
 cp "$HERE/git-ent" "$HERE/uninstall.sh" "$SHARE/"
 chmod 755 "$SHARE/git-ent" "$SHARE/uninstall.sh"

@@ -24,7 +24,7 @@ done
 ENT_LIB="$(cd "$(dirname "$_self")" && pwd)/lib"
 unset _self _dir
 [[ -d "$ENT_LIB" ]] || ENT_LIB="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent/lib"
-for _f in core config state paths tree view; do source "$ENT_LIB/$_f.sh"; done
+for _f in output args run prompt log tree state paths config view; do source "$ENT_LIB/$_f.sh"; done
 for _f in "$ENT_LIB"/cmd/*.sh; do source "$_f"; done
 unset _f
 
