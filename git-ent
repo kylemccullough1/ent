@@ -35,7 +35,7 @@ ensure_ent() {
 }
 
 # Verbs in the order `ent help` lists them.
-VERBS="init branch merge twig list status log go up down path sync rm destroy"
+VERBS="init branch merge twig track list status log go up down path sync rm destroy"
 
 cmd_help() {
   local v="${1:-}"
@@ -61,7 +61,7 @@ main() {
   if (( HELP )); then cmd_help "$verb"; exit 0; fi
   case "$verb" in
     help)    cmd_help "$(arg 1)" ;;
-    init|branch|merge|twig|list|status|log|go|up|down|path|sync|rm|destroy) "cmd_$verb" ;;
+    init|branch|merge|twig|track|list|status|log|go|up|down|path|sync|rm|destroy) "cmd_$verb" ;;
     __where) cmd_where ;;   # internal: used by the shell prompt helpers
     *)       die "unknown verb: $verb" ;;
   esac

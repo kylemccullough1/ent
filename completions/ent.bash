@@ -4,7 +4,7 @@
 # git's own completion looks for a function named _git_<subcommand> when completing
 # `git <subcommand> ...`, so defining _git_ent is all it takes to complete `git ent <TAB>`.
 
-_git_ent_verbs="init branch twig rm sync list status log path up down go destroy help"
+_git_ent_verbs="init branch twig rm sync list status log path up down go destroy help track"
 _git_ent_opts="--dry-run --verbose --quiet --help --version --recursive --force --from --remote --yes --win --here --worktrees --abort --continue"
 
 _git_ent_branches() { git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null; }
