@@ -72,6 +72,16 @@ tree_parent_of "feature/x"; [[ "$REPLY" == "main" ]] && pass "tree_parent_of" ||
 tree_children_of "main"; [[ "${REPLY_LIST[*]}" == "feature/x" ]] && pass "tree_children_of" || fail "tree_children_of"
 tree_worktree_of "feature/x"; [[ "$REPLY" == "branches/feature/x/core" ]] && pass "tree_worktree_of" || fail "tree_worktree_of"
 
+step "concurrent writes to ent.json do not corrupt the file"
+ENT="$(Norm "$T/tree-test")"
+for i in 1 2 3; do
+  (tree_add_node "concurrent$i" branch main "branches/concurrent$i/core" || true) &
+done
+wait
+tree_load
+n=0; for x in ${T_NAME[@]+"${T_NAME[@]}"}; do n=$((n+1)); done
+(( n >= 3 )) && pass "concurrent writes survived" || fail "concurrent writes corrupted node list"
+
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
 [[ -d "$T/fresh/.bare" && -d "$T/fresh/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
