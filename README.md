@@ -188,7 +188,9 @@ and an open handle blocks it.
 
 ## Looking around: `ent status` and `ent log`
 
-Both open a full screen you page through, one worktree at a time:
+Both open a full screen you page through, one worktree at a time. The viewer
+restores the terminal (alternate screen, cursor, and mouse-reporting modes) when
+you quit:
 
 ```
 tab / shift-tab   next / previous worktree      j k, arrows   scroll
