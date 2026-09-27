@@ -3,10 +3,13 @@
 # Global flags may appear anywhere on the line. Words that are not global flags
 # land in ARGS, so for `ent branch merge -y`, ARGS=(branch merge). Each verb
 # then calls take_flags, which takes its own flags out and refuses the rest.
+# --tab / --new-window are global too, but open_preflight (git-ent) refuses
+# them on any verb outside OPEN_VERBS.
 
 set -euo pipefail
 
 DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 YES=0
+OPEN_MODE=""     # tab or window: open the destination in Windows Terminal (--tab, --new-window)
 FROM="" REMOTE="" WORKTREES="" FORCE=0 RECURSIVE=0 MERGE_ABORT=0 MERGE_CONTINUE=0 WIN=0 HERE=0
 ARGS=()
 REST_ARGS=()     # whatever followed `--`, passed on to git (see cmd_log)
@@ -24,6 +27,8 @@ parse_globals() {
       --quiet|-q)     QUIET=1 ;;
       --help|-h)      HELP=1 ;;
       --yes|-y)       YES=1 ;;
+      --tab)          [[ "$OPEN_MODE" != window ]] || die "--tab and --new-window can't be used together"; OPEN_MODE=tab ;;
+      --new-window)   [[ "$OPEN_MODE" != tab ]] || die "--tab and --new-window can't be used together"; OPEN_MODE=window ;;
       --version)      echo "git-ent $VERSION"; exit 0 ;;
       --)             shift; REST_ARGS=("$@"); break ;;
       *)              ARGS+=("$1") ;;

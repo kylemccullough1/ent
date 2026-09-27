@@ -7,6 +7,7 @@ twig <name> [--from <branch>]          create a twig of the current branch
   From main or the ent root, name the branch with --from.
   Twigs go one level deep: git cannot have both a branch and a folder of the
   same name, so a twig of a twig has no name left to use.
+  --tab / --new-window open the new twig in Windows Terminal instead of moving this shell.
 EOF
 }
 
@@ -43,5 +44,5 @@ cmd_twig() {
   worktree_bare_guard "$core_dir"
   tree_add_node "$branch" twig "$parent" "${core_dir#"$ENT"/}"
   run git -C "$ENT" config "branch.$branch.entParent" "$parent"
-  emit_path "$core_dir" "Created twig $branch at $core_dir"
+  emit_path "$core_dir" "Created twig $branch at $core_dir" "$branch"
 }

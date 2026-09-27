@@ -6,6 +6,8 @@ init <name | url | clone-path> [dir]   build a new ent
   url         clone a remote:               ent init git@host:org/repo.git
   clone-path  import an existing clone:     ent init ../old-clone new-ent
   The default branch is checked out at <dir>/main/core.
+  With Windows Terminal, a new ent opens in a new window when it is a different
+  ent from the one you are in; --tab makes it a tab instead.
 
 init --here [path]                     turn an existing repo into an ent, in place
   .git becomes .bare and everything else moves down into main/core, including
@@ -98,7 +100,21 @@ cmd_init() {
   load_state
 
   case "$OSTYPE" in msys*|cygwin*) note "Windows: deep paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
-  emit_path "$dir/main/core" "Ent ready at $dir (default branch: $def)"
+  init_open_default "$dir"
+  emit_path "$dir/main/core" "Ent ready at $dir (default branch: $def)" "$def"
+}
+
+# init_open_default <new-ent-root>: with no --tab or --new-window given, a new ent
+# opens in a new Windows Terminal window when it is a different ent from the one you
+# are standing in, judged now that it exists: `ent init x .` in an empty folder
+# builds the ent around you, so that one just moves your shell as before.
+# Without Windows Terminal nothing changes. `init --here` never calls this.
+init_open_default() {
+  [[ -z "$OPEN_MODE" ]] || return 0
+  wt_bin || return 0
+  local here; here="$(ent_root 2>/dev/null || true)"
+  if [[ "$here" != "$(ent_norm "$1")" ]]; then OPEN_MODE=window; fi
+  return 0
 }
 
 # init_empty_branch <name>: create <name> pointing at an empty "Initial commit".
@@ -606,5 +622,5 @@ cmd_init_here() {
   fi
   run git -C "$ent" config ent.canopy "$def"
   case "$OSTYPE" in msys*|cygwin*) note "Windows: deep paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
-  emit_path "$ent/main/core" "Ent ready at $ent (default branch: $def)"
+  emit_path "$ent/main/core" "Ent ready at $ent (default branch: $def)" "$def"
 }

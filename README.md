@@ -86,6 +86,8 @@ ent branch feature/x --remote feature/x  # explicit local name, still tracking o
 ent track feature/x --remote feature/x   # link an existing local branch to a remote branch
 ent twig db                        # inside feature/x: branch twigs/feature/x/db
 ent up / ent down db / ent go feature/x
+ent go feature/x --tab             # open it in a new Windows Terminal tab instead
+ent open [feature/x] [--new-window]  # a new tab (or window) for a branch, or where you stand
 ent list                           # the whole tree
 ent status                         # git status of every worktree, full screen
 ent log                            # git log of every worktree, full screen
@@ -216,6 +218,41 @@ They open on the worktree you are standing in. `ent log -- --stat -n 20` passes
 everything after `--` to `git log`. Piped or redirected, both print every
 worktree in order instead, so `ent status | grep ...` works.
 
+## Windows Terminal: `--tab`, `--new-window`, `ent open`
+
+On Windows with [Windows Terminal](https://learn.microsoft.com/en-us/windows/terminal/),
+every verb that ends at a folder (`init`, `branch`, `branch merge`, `twig`, `go`,
+`up`, `down`) takes `--tab` or `--new-window`. Instead of moving your shell, the
+folder opens in a new tab or window, titled with the branch name:
+
+```bash
+ent go feature/x --tab             # same as: ent open feature/x
+ent twig spike --new-window        # create the twig, open it in its own window
+ent open                           # a second tab on the branch you are standing in
+```
+
+Behind it is one `wt.exe` command; `-n` shows it without running it:
+
+```bash
+MSYS_NO_PATHCONV=1 wt.exe -w 0 nt --title feature/x -d 'C:\...\branches\feature\x\core'
+```
+
+- `-w 0` adds a tab to the most recent window; `--new-window` uses `-w new`.
+- `ent init` opens its new ent in a new window when that ent is not the one you
+  are standing in. `ent init --here` just moves you, as before.
+- `ent branch merge --tab` opens the branch it merged into, and moves the shell
+  you ran it from to the ent root, since its folder is gone.
+- Windows Terminal is checked before anything changes, so `ent branch x --tab`
+  without it fails without creating `x`.
+- Inside Windows Terminal the prompt keeps the tab title on the ent branch you
+  are in, including after `ent go` inside the tab. With Git Bash's default prompt
+  it replaces the `MINGW64:/c/...` title; outside an ent the title is unchanged.
+
+Settings: `ent.wtProfile` (or `ENT_WTPROFILE`) names the Windows Terminal profile
+new tabs use (`wt -p`); unset means your default profile. `ENT_WT` points ent at
+a different `wt` program, which the tests use to record the command instead of
+opening windows.
+
 ## Settings: `.entrc` (optional)
 
 Commit a `.entrc` on your repo's default branch to share rules with everyone
@@ -270,8 +307,9 @@ Outside an ent the helper runs no programs at all, so it never slows your prompt
 | `lib/config.sh` | Settings layers and `.entrc`. |
 | `lib/cmd/<verb>.sh` | One verb each, with its `help_<verb>` text. |
 | `lib/view.sh` | The full-screen viewer behind `status` and `log`. |
+| `lib/wt.sh` | Windows Terminal: finds `wt.exe` and opens a folder in a tab or window. |
 | `completions/ent.sh` | Loaded by your shell; picks ent.zsh or ent.bash. |
-| `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper. |
+| `completions/ent.bash`, `ent.zsh` | The `ent` wrapper, tab completion, prompt helper, tab-title hook. |
 | `install.sh`, `uninstall.sh` | Copy into `~/.local`, add or remove the rc `source` line. |
 
 Two conventions run through the code:

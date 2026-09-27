@@ -9,6 +9,9 @@ export GIT_CONFIG_GLOBAL="$T/gitconfig" NO_COLOR=1 GIT_CONFIG_NOSYSTEM=1
 # PATH entry: `git ent` would then find an installed copy instead of this one.
 _bin="$(dirname "$G")"; if command -v cygpath >/dev/null 2>&1; then _bin="$(cygpath -u "$_bin")"; fi
 export PATH="$_bin:$PATH"; unset _bin
+# Never open real Windows Terminal windows from the tests: a set-but-missing ENT_WT
+# means "no WT", so init keeps printing its path. The WT step points it at a fake.
+export ENT_WT="$T/no-wt"
 
 git config --global user.name t
 git config --global user.email t@x
@@ -1211,6 +1214,96 @@ fi
 step "ent init . points at --here instead of nesting"
 mkrepo "$T/nest"
 expect_fail "init . refuses to nest inside the source" "ent init --here" ent "$T/nest" init .
+
+step "open in Windows Terminal (--tab, --new-window, ent open)"
+# A fake wt writes its arguments one per line to $T/wt.args; each check reads them
+# back joined with spaces. Win spells a folder the way wt.exe receives it.
+FAKE_WT="$T/wtbin/wt"
+mkdir -p "$T/wtbin"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" > "%s/wt.args"\n' "$T" >"$FAKE_WT"
+chmod +x "$FAKE_WT"
+Win() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
+wt_args() { if [[ -f "$T/wt.args" ]]; then tr '\n' ' ' <"$T/wt.args" | sed 's/ $//'; fi; rm -f "$T/wt.args"; }
+went() { ENT_WT="$FAKE_WT" ent "$@"; }
+ent "$T" init wte >/dev/null 2>&1
+ent "$T/wte" branch feature/w >/dev/null 2>&1
+ent "$T/wte/branches/feature/w/core" twig side >/dev/null 2>&1
+W="$(Norm "$T/wte")"
+
+check "" "$(went "$T/wte" go feature/w --tab 2>/dev/null)" "go --tab prints no folder, so the wrapper stays put"
+check "-w 0 nt --title feature/w -d $(Win "$W/branches/feature/w/core")" "$(wt_args)" "go --tab opens a tab titled with the branch"
+went "$T/wte" go feature/w --new-window >/dev/null 2>&1
+check "-w new nt --title feature/w -d $(Win "$W/branches/feature/w/core")" "$(wt_args)" "--new-window opens a window"
+went "$T/wte" open side >/dev/null 2>&1
+check "-w 0 nt --title twigs/feature/w/side -d $(Win "$W/branches/feature/w/twigs/side/core")" "$(wt_args)" "open a twig by short name, titled with its full name"
+went "$T/wte/branches/feature/w/twigs/side/core" open >/dev/null 2>&1
+check "-w 0 nt --title twigs/feature/w/side -d $(Win "$W/branches/feature/w/twigs/side/core")" "$(wt_args)" "open with no name opens where you stand"
+went "$T/wte" open >/dev/null 2>&1
+check "-w 0 nt --title main -d $(Win "$W/main/core")" "$(wt_args)" "open at the ent root opens main"
+went "$T/wte/branches/feature/w/twigs/side/core" up --tab >/dev/null 2>&1
+check "-w 0 nt --title feature/w -d $(Win "$W/branches/feature/w/core")" "$(wt_args)" "up --tab from a twig opens its parent"
+went "$T/wte/branches/feature/w/core" down --tab >/dev/null 2>&1
+check "-w 0 nt --title twigs/feature/w/side -d $(Win "$W/branches/feature/w/twigs/side/core")" "$(wt_args)" "down --tab opens the twig"
+check "" "$(went "$T/wte" branch feature/nb --tab 2>/dev/null)" "branch --tab prints no folder"
+[[ -d "$T/wte/branches/feature/nb/core" ]] && pass "branch --tab still creates the branch" || fail "branch --tab still creates the branch"
+check "-w 0 nt --title feature/nb -d $(Win "$W/branches/feature/nb/core")" "$(wt_args)" "branch --tab opens the new branch"
+went "$T/wte/branches/feature/nb/core" twig t2 --tab >/dev/null 2>&1
+check "-w 0 nt --title twigs/feature/nb/t2 -d $(Win "$W/branches/feature/nb/twigs/t2/core")" "$(wt_args)" "twig --tab opens the new twig"
+printf 'x\n' >"$T/wte/branches/feature/nb/twigs/t2/core/x.txt"
+(cd "$T/wte/branches/feature/nb/twigs/t2/core" && git add x.txt && git commit -qm x)
+check "$W" "$(went "$T/wte/branches/feature/nb/twigs/t2/core" branch merge -y --tab 2>/dev/null)" "branch merge --tab moves this shell to the ent root"
+check "-w 0 nt --title feature/nb -d $(Win "$W/branches/feature/nb/core")" "$(wt_args)" "branch merge --tab opens the branch it merged into"
+went "$T/wte" -n go feature/w --tab >/dev/null 2>"$T/err"
+check "" "$(wt_args)" "--dry-run does not start wt"
+grep -qF -- "-w 0 nt --title feature/w" "$T/err" && pass "--dry-run shows the wt command" || fail "--dry-run shows the wt command"
+
+expect_fail "--tab and --new-window together" "can't be used together" went "$T/wte" go feature/w --tab --new-window
+expect_fail "--tab on a verb with no folder" "only apply to" went "$T/wte" list --tab
+expect_fail "missing WT is caught before any change" "need Windows Terminal" ent "$T/wte" branch feature/zz --tab
+[[ ! -e "$T/wte/branches/feature/zz" ]] && pass "and the branch was not created" || fail "and the branch was not created"
+if unix_only "open without Windows Terminal"; then
+  expect_fail "open without Windows Terminal" "need Windows Terminal" env -u ENT_WT "$BASH" -c 'cd "$1" && "$BASH" "$2" open' _ "$T/wte" "$G"
+fi
+
+# init opens a new window when the new ent is not the one you stand in.
+check "" "$(went "$T" init wtnew 2>/dev/null)" "init elsewhere prints no folder"
+check "-w new nt --title main -d $(Win "$(Norm "$T/wtnew")/main/core")" "$(wt_args)" "init elsewhere opens a new window"
+check "" "$(went "$T/wte/main/core" init inner 2>/dev/null)" "init from inside another ent prints no folder"
+check "-w new nt --title main -d $(Win "$(Norm "$T/wte/main/core/inner")/main/core")" "$(wt_args)" "init from inside another ent opens a new window"
+mkdir -p "$T/wtaround"
+check "$(Norm "$T/wtaround")/main/core" "$(went "$T/wtaround" init around . 2>/dev/null)" "init . builds the ent around you and prints its folder"
+check "" "$(wt_args)" "init . opens nothing"
+went "$T" init wttab --tab >/dev/null 2>&1
+check "-w 0 nt --title main -d $(Win "$(Norm "$T/wttab")/main/core")" "$(wt_args)" "init --tab opens a tab instead"
+mkrepo "$T/wthere"
+went "$T" init --here -y "$T/wthere" >"$T/out" 2>/dev/null
+check "$(Norm "$T/wthere")/main/core" "$(cat "$T/out")" "init --here prints its folder as before"
+check "" "$(wt_args)" "init --here opens nothing"
+
+step "the prompt hook titles the tab with the ent branch"
+# Sourced into a plain bash the way Git Bash's profile leaves it: PS1 sets the title
+# from $TITLEPREFIX:$PWD. Each case cds, runs the hook, and prints the title.
+hook() {
+  WT_SESSION=test "$BASH" --norc -c '
+    PS1='"'"'\[\033]0;$TITLEPREFIX:$PWD\007\]\n$ '"'"'
+    source "$1"; source "$1"; cd "$2" || exit 1
+    __ent_prompt_hook; __ent_prompt_hook
+    printf "%s|%s\n" "$__ENT_TITLE" "$PS1"' _ "$(dirname "$G")/completions/ent.bash" "$1" 2>&1
+}
+out="$(hook "$T/wte/branches/feature/w/core")"
+check "feature/w" "${out%%|*}" "a branch folder"
+check "twigs/feature/w/side" "$(hook "$T/wte/branches/feature/w/twigs/side/core/" | cut -d'|' -f1)" "a twig folder"
+check "feature/w" "$(hook "$T/wte/branches/feature/w/twigs" | cut -d'|' -f1)" "a branch's twigs/ folder"
+check "main" "$(hook "$T/wte/main/core" | cut -d'|' -f1)" "main"
+check "ent" "$(hook "$T/wte" | cut -d'|' -f1)" "the ent root"
+check "" "$(hook "$T" | cut -d'|' -f1)" "outside any ent"
+case "$out" in
+  *'${__ENT_TITLE:-$TITLEPREFIX:$PWD}'*) pass "PS1's title now follows the branch" ;;
+  *) fail "PS1's title now follows the branch: $out" ;;
+esac
+[[ "$(printf '%s' "$out" | grep -o __ENT_TITLE | wc -l | tr -d ' ')" == 1 ]] && pass "sourcing twice rewrites PS1 once" || fail "sourcing twice rewrites PS1 once: $out"
+out="$(WT_SESSION= "$BASH" --norc -c 'source "$1"; printf "%s" "${PROMPT_COMMAND:-}"' _ "$(dirname "$G")/completions/ent.bash")"
+check "" "$out" "outside Windows Terminal no hook is installed"
 echo
 if (( bad )); then
   echo "SOME FAILURES ($n checks, $skipped skipped)"

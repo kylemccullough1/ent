@@ -6,6 +6,8 @@ branch merge [-y]                      merge the current branch into its parent,
   Run inside the core/ folder. The branch's own twigs are merged into it first.
   Shows the diff and asks before merging unless -y.
   On conflicts: fix them, then `ent branch merge --continue` (or --abort).
+  --tab / --new-window open the branch it merged into in Windows Terminal; this
+  shell moves to the ent root, since the folder it stood in is gone.
 EOF
 }
 
@@ -73,8 +75,11 @@ cmd_merge() {
   cd "$ENT"   # step out of the folder that is about to be removed
   RM_LEFTOVER=()
   rm_tree "$src"
-  if (( ${#RM_LEFTOVER[@]} )); then emit_path "$target_core" "Merged $src; its folder is still there (see above)"
-  else emit_path "$target_core" "Merged and finished $src"; fi
+  if (( ${#RM_LEFTOVER[@]} )); then emit_path "$target_core" "Merged $src; its folder is still there (see above)" "$target"
+  else emit_path "$target_core" "Merged and finished $src" "$target"; fi
+  # With --tab the target opened elsewhere, but this shell still stands in the
+  # folder just removed; hand the wrapper the ent root to move it somewhere real.
+  if [[ -n "$OPEN_MODE" ]]; then printf '%s\n' "$ENT"; fi
 }
 
 # merge_twigs_up <branch>: merge every twig below <branch> into its parent,

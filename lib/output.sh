@@ -49,5 +49,14 @@ die()  {
 
 usage_die() { die "usage: ent $1"; }
 
-# emit_path: print a path on stdout (for the `ent` wrapper to cd into) and a note on stderr.
-emit_path() { printf '%s\n' "$1"; if [[ -n "${2:-}" ]]; then note "$2"; fi; return 0; }
+# emit_path <path> [note] [title]: hand the verb's destination to the user. Normally
+# that means printing it on stdout for the `ent` wrapper to cd into. With --tab or
+# --new-window it opens the folder in Windows Terminal instead (lib/wt.sh) and prints
+# nothing, so the wrapper leaves your shell where it is. <title> names the new tab;
+# callers pass the branch, because the state snapshot predates any folder they just made.
+emit_path() {
+  if [[ -n "${OPEN_MODE:-}" ]]; then wt_open "$1" "${3:-${1##*/}}"
+  else printf '%s\n' "$1"; fi
+  if [[ -n "${2:-}" ]]; then note "$2"; fi
+  return 0
+}
