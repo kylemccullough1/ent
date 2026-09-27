@@ -63,22 +63,30 @@ ent_twigname() {
 # ent_canopy: the default branch name for the current ent.
 ent_canopy() { state_ready; printf '%s' "$S_MAIN"; }
 
+# _tree_abs <path>: a worktree path from the tree as an absolute path. Paths
+# inside the ent are stored relative to it; one kept outside the ent (init
+# --here --worktrees keep) is stored absolute, /x or C:/x, and used as is.
+_tree_abs() {
+  case "$1" in
+    /*|[A-Za-z]:/*) printf '%s' "$1" ;;
+    *)              printf '%s/%s' "$ENT" "$1" ;;
+  esac
+}
+
 # ent_container <branch>: the folder holding the branch's core/ and twigs/.
+# Where the branch belongs, from the tree (or the layout when it has no node);
+# never creates anything. wt_path_of says where it is checked out right now.
 ent_container() {
   state_ready
   local rel
   if [[ "$1" == "$S_MAIN" ]]; then printf '%s/main' "$ENT"; return 0; fi
   if tree_worktree_of "$1" 2>/dev/null && [[ -n "$REPLY" ]]; then
     rel="$REPLY"
-    if [[ "$rel" == */core ]]; then
-      printf '%s/%s' "$ENT" "${rel%/core}"
-    else
-      printf '%s/%s' "$ENT" "$rel"
-    fi
+    _tree_abs "${rel%/core}"
     return 0
   fi
-  # Fallback for branches that exist in git but have not been recorded in the
-  # node tree yet.  This keeps older ents working until auto-adoption runs.
+  # No node, or a node with no recorded worktree (a branch made with plain git):
+  # the layout says where it would go.
   parent_of "$1"
   if [[ -z "$REPLY" ]]; then
     printf '%s/branches/%s' "$ENT" "$1"
@@ -92,7 +100,7 @@ ent_container() {
 ent_core() {
   state_ready
   if tree_worktree_of "$1" 2>/dev/null && [[ -n "$REPLY" ]]; then
-    printf '%s/%s' "$ENT" "$REPLY"
+    _tree_abs "$REPLY"
     return 0
   fi
   printf '%s/core' "$(ent_container "$1")"

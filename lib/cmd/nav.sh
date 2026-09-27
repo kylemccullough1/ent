@@ -52,14 +52,12 @@ cmd_down() {
   emit_path "$(ent_core "$match")"
 }
 
-# go_emit <branch>: hand back the branch's folder, or explain why there is none.
-# A branch can exist with no worktree (its folder removed, or it was made with
-# plain git), and emitting a path that is not there just makes the shell
-# wrapper fail at `cd`.
+# go_emit <branch>: hand back the branch's folder. A branch with no worktree (its
+# folder removed, or made with plain git) is adopted first: naming it is asking
+# for it, and emitting a path that is not there just makes the shell wrapper
+# fail at `cd`.
 go_emit() {
-  if ! wt_path_of "$1"; then
-    die "branch '$1' has no worktree. Give it one:  ent branch $1"
-  fi
+  tree_adopt_if_missing "$1"
   emit_path "$(ent_core "$1")"
 }
 

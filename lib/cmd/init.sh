@@ -89,14 +89,18 @@ cmd_init() {
       done < <(git -C "$src" config --get-regexp '^branch\..*\.(remote|merge)$' 2>/dev/null || true)
     fi
     def="$(git -C "$ENT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
-    load_state
     if [[ -z "$def" ]]; then
-      local c; for c in main master; do if has_local "$c" || has_remote "$c"; then def="$c"; break; fi; done
+      local c; for c in main master; do
+        if git -C "$ENT" show-ref -q --verify "refs/heads/$c" 2>/dev/null || git -C "$ENT" show-ref -q --verify "refs/remotes/origin/$c" 2>/dev/null; then
+          def="$c"; break
+        fi
+      done
     fi
     [[ -n "$def" ]] || die "could not determine the default branch: no origin/HEAD, main, or master"
     run git -C "$ENT" symbolic-ref HEAD "refs/heads/$def"
-    if ! has_local "$def"; then run git -C "$ENT" branch --track "$def" "origin/$def"
-    elif has_remote "$def" && [[ -z "$(git -C "$ENT" config --get "branch.$def.merge" 2>/dev/null || true)" ]]; then
+    if ! git -C "$ENT" show-ref -q --verify "refs/heads/$def" 2>/dev/null; then
+      run git -C "$ENT" branch --track "$def" "origin/$def"
+    elif git -C "$ENT" show-ref -q --verify "refs/remotes/origin/$def" 2>/dev/null && [[ -z "$(git -C "$ENT" config --get "branch.$def.merge" 2>/dev/null || true)" ]]; then
       run git -C "$ENT" branch --set-upstream-to="origin/$def" "$def"
     fi
   fi
@@ -104,7 +108,11 @@ cmd_init() {
   run mkdir -p "$dir/main"
   run git -C "$ENT" worktree add "$dir/main/core" "$def"
   worktree_bare_guard "$dir/main/core"
+  # ent.canopy first: load_state writes .bare/ent.json on first use, and it
+  # reads the canopy from that key. The other order records "main" for a
+  # develop or master repo, and the file then wins forever.
   run git -C "$ENT" config ent.canopy "$def"
+  load_state
 
   case "$OSTYPE" in msys*|cygwin*) note "Windows: deep paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
   emit_path "$dir/main/core" "Ent ready at $dir (default branch: $def)"
@@ -613,7 +621,7 @@ cmd_init_here() {
       worktree_bare_guard "$ent/main/core"
     fi
   fi
-  run git -C "$ent" config ent.main "$def"
+  run git -C "$ent" config ent.canopy "$def"
   case "$OSTYPE" in msys*|cygwin*) note "Windows: deep paths can exceed MAX_PATH. If git complains, run: git config core.longpaths true" ;; esac
   emit_path "$ent/main/core" "Ent ready at $ent (default branch: $def)"
 }

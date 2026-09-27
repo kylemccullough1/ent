@@ -6,6 +6,7 @@ G="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-ent"
 T="$(mktemp -d)"
 export GIT_CONFIG_GLOBAL="$T/gitconfig" NO_COLOR=1 GIT_CONFIG_NOSYSTEM=1
 export PATH="$(dirname "$G"):$PATH"
+export ENT_NO_SAY=1
 
 git config --global user.name t
 git config --global user.email t@x
@@ -141,6 +142,7 @@ step "init when origin default branch is not main"
 mkdir "$T/srcdev"; (cd "$T/srcdev" && git init -q -b develop . && echo d >d && git add . && git commit -qm dev)
 ent "$T" init "$T/srcdev" gdev >/dev/null 2>&1
 check "develop" "$(git -C "$T/gdev" config ent.canopy)" "ent.canopy recorded as develop"
+grep -q '"canopy": "develop"' "$T/gdev/.bare/ent.json" && pass "ent.json canopy is develop" || fail "ent.json canopy: $(grep canopy "$T/gdev/.bare/ent.json")"
 
 step "branch top-level branch"
 cd "$T/g1/main/core"
@@ -207,6 +209,44 @@ HGLOBAL="$T/home-global"; mkdir -p "$HGLOBAL/.config"
 (cd "$T" && HOME="$HGLOBAL" "$BASH" "$G" unknown-verb >/dev/null 2>&1) || true
 [[ -f "$HGLOBAL/.config/ent/global.log" ]] && pass "global log exists" || fail "global log exists"
 grep -q "ERROR" "$HGLOBAL/.config/ent/global.log" && pass "global error written" || fail "global error written"
+
+step "a branch made with plain git is listed, and adopted when named"
+mkdir -p "$T/auto"; cd "$T/auto" && git init -q -b main .
+touch README.md && git add README.md && git commit -qm init
+ent "$T/auto" init --here -y >/dev/null 2>&1
+git -C "$T/auto/.bare" branch from-plain-git >/dev/null 2>&1
+out=$(ent "$T/auto" list)
+echo "$out" | grep -q "from-plain-git \[no worktree\]" && pass "plain-git branch listed as [no worktree]" || fail "list: $out"
+[[ ! -e "$T/auto/branches/from-plain-git" ]] && pass "list created no folder" || fail "list created a folder"
+# ent.json exists now. A branch made after that has no node at all, which used
+# to end `list` silently under set -e.
+git -C "$T/auto/.bare" branch after-json >/dev/null 2>&1
+out=$(ent "$T/auto" list 2>&1); rc=$?
+check "0" "$rc" "list succeeds with a branch that has no node"
+echo "$out" | grep -q "after-json \[no worktree\]" && pass "branch with no node is listed" || fail "list: $out"
+check "$(Norm "$T/auto")/branches/after-json/core" "$(ent "$T/auto" go after-json 2>/dev/null)" "go adopts a branch with no node"
+check "after-json" "$(git -C "$T/auto/branches/after-json/core" branch --show-current 2>/dev/null)" "adopted folder is on the branch"
+grep -q '"after-json"' "$T/auto/.bare/ent.json" && pass "adoption recorded the node" || fail "adoption did not record the node"
+
+step "dry run leaves ent.json alone"
+before="$(cat "$T/auto/.bare/ent.json")"
+ent "$T/auto" -n branch dry-only >/dev/null 2>&1
+check "$before" "$(cat "$T/auto/.bare/ent.json")" "-n branch writes no node"
+git -C "$T/auto/.bare" branch dry-plain >/dev/null 2>&1
+ent "$T/auto" -n go dry-plain >/dev/null 2>&1
+[[ ! -e "$T/auto/branches/dry-plain" ]] && pass "-n go creates no folder" || fail "-n go created a folder"
+check "$before" "$(cat "$T/auto/.bare/ent.json")" "-n go writes no node"
+
+step "rm forgets the node, so the name can be used again"
+ent "$T/auto" branch again >/dev/null 2>&1
+ent "$T/auto/branches/again/core" twig tw >/dev/null 2>&1
+ent "$T/auto" rm -y twigs/again/tw >/dev/null 2>&1
+out=$(ent "$T/auto" list)
+echo "$out" | grep -q "twigs/again/tw" && fail "removed twig still listed: $out" || pass "removed twig is gone from list"
+grep -q '"twigs/again/tw"' "$T/auto/.bare/ent.json" && fail "removed twig still in ent.json" || pass "removed twig gone from ent.json"
+ent "$T/auto" rm -y again >/dev/null 2>&1
+expect_ok "a removed branch can be made again" ent "$T/auto" branch again
+[[ -d "$T/auto/branches/again/core" ]] && pass "re-created branch has its folder" || fail "re-created branch has no folder"
 
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
@@ -348,7 +388,7 @@ if windows_only "ent go --help leaves the folder alone (windows)"; then
 fi
 
 step "git-ent works through a symlink"
-mkdir -p "$T/linkbin" && ln -s "$G" "$T/linkbin/git-ent"
+mkdir -p "$T/linkbin" && MSYS=winsymlinks:nativestrict ln -s "$G" "$T/linkbin/git-ent"
 check "$(Norm "$T/g1/branches/feature/456/core")" "$(cd "$T/g1" && "$BASH" "$T/linkbin/git-ent" go feature/456)" "symlinked git-ent finds lib/"
 
 step "rm --dry-run changes nothing"
@@ -378,7 +418,7 @@ git -C "$T/g1/.bare" show-ref --verify -q refs/heads/feature/a && fail "branch r
 git -C "$T/g1/.bare" config --get branch.feature/a.entparent >/dev/null 2>&1 && fail "entparent config remains" || pass "entparent config removed"
 
 step "rm rejects unknown option --apply"
-expect_fail "unknown option --apply" "unknown option" ent "$T/g1" rm feature/456 --apply
+expect_fail "unknown option --apply" "unknown rm option" ent "$T/g1" rm feature/456 --apply
 
 step "rm refuses dirty worktree"
 ent "$T/g1" branch feature/dirty >/dev/null
@@ -762,7 +802,7 @@ step "sparse-checkout does not brick an ent"
 mkrepo "$T/sparse"
 ent "$T/sparse" init --here -y >/dev/null 2>&1
 ent "$T/sparse/main/core" branch feature/sp >/dev/null 2>&1
-(cd "$T/sparse/main/core" && git sparse-checkout set README.md >/dev/null 2>&1)
+(cd "$T/sparse/main/core" && git sparse-checkout set --skip-checks README.md >/dev/null 2>&1)
 git -C "$T/sparse/main/core" status >/dev/null 2>&1 && pass "main/core still works after sparse-checkout" || fail "main/core bricked by sparse-checkout"
 git -C "$T/sparse/branches/feature/sp/core" status >/dev/null 2>&1 && pass "branch still works after sparse-checkout" || fail "branch bricked by sparse-checkout"
 ent "$T/sparse/main/core" branch feature/sp2 >/dev/null 2>&1
@@ -864,7 +904,7 @@ check "feature/x" "$(git -C "$T/wtdef-ent/branches/feature/x/core" branch --show
 step "kept worktrees get the core.bare guard too"
 mkrepo "$T/wtsparse"
 git -C "$T/wtsparse" worktree add -q "$T/wtsparse-side" feature/local-only 2>/dev/null
-(cd "$T/wtsparse" && git sparse-checkout set README.md >/dev/null 2>&1)
+(cd "$T/wtsparse" && git sparse-checkout set --skip-checks README.md >/dev/null 2>&1)
 ent "$T/wtsparse" init --here -y --worktrees move >/dev/null 2>&1
 git -C "$T/wtsparse-ent/branches/feature/local-only/core" status >/dev/null 2>&1 \
   && pass "the moved worktree still works with worktreeConfig on" || fail "moved worktree bricked by worktreeConfig"
@@ -896,7 +936,7 @@ out="$(ent "$T/g1/branches/feature/ok/core" down 2>&1)"
 echo "$out" | grep -q "no children to move down into" && pass "down still says no children" || fail "down wording changed"
 echo "$out" | grep -q "ent go" && pass "down points at ent go" || fail "down does not point at ent go"
 
-step "a branch with no worktree is visible, unreachable, and recoverable"
+step "a branch with no worktree is visible and recoverable"
 ent "$T/g1" branch feature/lonely >/dev/null 2>&1
 # How you actually end up here: the folder goes by hand, and git prunes the
 # registration. The branch itself is untouched.
@@ -907,8 +947,8 @@ check "" "$(git -C "$T/g1" worktree list --porcelain | grep -c 'feature/lonely' 
 out="$(ent "$T/g1" list 2>/dev/null)"
 echo "$out" | grep -q "feature/lonely \[no worktree\]" \
   && pass "list marks it [no worktree]" || fail "list marks it: $(echo "$out" | grep lonely)"
-expect_fail "go refuses a branch with no worktree" "has no worktree" ent "$T/g1" go feature/lonely
-ent "$T/g1" branch feature/lonely >/dev/null 2>&1
+# The tree still records its old folder; git is what says the folder is gone.
+check "$(Norm "$T/g1")/branches/feature/lonely/core" "$(ent "$T/g1" go feature/lonely 2>/dev/null)" "go gives it its folder back"
 [[ -d "$T/g1/branches/feature/lonely/core" ]] && pass "branch gave it a folder back" || fail "branch did not adopt it"
 check "feature/lonely" "$(git -C "$T/g1/branches/feature/lonely/core" branch --show-current 2>/dev/null)" "the folder is on that same branch"
 [[ -d "$T/g1/branches/feature/lonely/twigs" ]] && pass "and has a twigs sibling" || fail "no twigs sibling"
@@ -916,6 +956,10 @@ out="$(ent "$T/g1" list 2>/dev/null)"
 echo "$out" | grep -q "feature/lonely \[no worktree\]" \
   && fail "still marked [no worktree] after adoption" || pass "the mark is gone after adoption"
 expect_fail "a branch that still has a worktree is refused" "already exists" ent "$T/g1" branch feature/lonely
+ent "$T/g1" branch feature/lonely2 >/dev/null 2>&1
+rm -rf "$T/g1/branches/feature/lonely2"; git -C "$T/g1" worktree prune
+ent "$T/g1" branch feature/lonely2 >/dev/null 2>&1
+check "feature/lonely2" "$(git -C "$T/g1/branches/feature/lonely2/core" branch --show-current 2>/dev/null)" "branch <name> also gives it its folder back"
 step "init --here and the folder your shell is standing in"
 # Windows cannot rename a folder a process is sitting in, so --here refuses
 # rather than failing halfway. Unix has no such rule, so there it just works.

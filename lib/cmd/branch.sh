@@ -37,22 +37,6 @@ check_new_name() {
   return 0
 }
 
-# branch_adopt <branch>: the branch exists but has no worktree, so give it its
-# folder back. The "already exists" refusal is there to stop you clobbering a
-# branch; with no folder there is nothing to clobber. branchPattern is not
-# applied here -- the branch exists either way, and refusing it a folder over a
-# naming rule helps nobody.
-branch_adopt() {
-  local branch="$1" core_dir container
-  container="$(ent_container "$branch")" core_dir="$container/core"
-  [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
-  run mkdir -p "$container/twigs"
-  # No -b: the branch is already there, we are only checking it out.
-  run git -C "$ENT" worktree add "$core_dir" "$branch"
-  worktree_bare_guard "$core_dir"
-  emit_path "$core_dir" "Gave existing branch $branch a folder at $core_dir"
-}
-
 cmd_branch() {
   ensure_ent
   parse_branch_args
@@ -62,7 +46,11 @@ cmd_branch() {
   # An existing branch with no worktree is adopted rather than refused. This
   # comes before the twigs/ guard: that guard stops you CREATING a twig branch
   # by hand, but an existing one deserves its folder back like any other.
-  if has_local "$branch" && ! wt_path_of "$branch"; then branch_adopt "$branch"; return; fi
+  if has_local "$branch" && ! wt_path_of "$branch"; then
+    tree_adopt_if_missing "$branch"
+    emit_path "$(ent_core "$branch")" "Gave existing branch $branch a folder"
+    return
+  fi
   [[ "$branch" != twigs/* ]] || die "'twigs/' is reserved for twig branches; pick another name"
   [[ -z "$FROM" || -z "$REMOTE" ]] || die "--from and --remote are mutually exclusive"
   check_new_name "$branch"
@@ -85,5 +73,6 @@ cmd_branch() {
   run mkdir -p "$ENT/branches/$branch/twigs"
   run git -C "$ENT" worktree add "$track_arg" -b "$branch" "$core_dir" "$base"
   worktree_bare_guard "$core_dir"
+  tree_add_node "$branch" branch "" "branches/$branch/core"
   emit_path "$core_dir" "Created branch $branch at $core_dir"
 }

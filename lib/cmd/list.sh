@@ -2,8 +2,9 @@
 
 help_list() { cat <<'EOF'
 list                                   show branches and twigs as a tree
-  Markers:  [?] checked out somewhere other than its ent folder
-            [!] its parent branch no longer exists
+  Markers:  [relocated] checked out somewhere other than its ent folder
+            [orphan] its parent branch no longer exists
+            [no worktree] the branch has no folder (`ent go <branch>` makes one)
             [MERGING] / [REBASING] / ... an operation is unfinished there
 EOF
 }
@@ -22,13 +23,13 @@ cmd_list() {
 list_node() {
   local b="$1" indent="$2" container="$3" marks="" label="" kids child
   if wt_path_of "$b"; then
-    if [[ "$REPLY" != "$container/core" ]]; then marks+="?"; fi
+    if [[ "$REPLY" != "$container/core" ]]; then marks+="relocated "; fi
   else
-    label+=" [no worktree]"   # a branch with nowhere to stand
+    label+=" [no worktree]"   # a branch with nowhere to stand; `ent go` gives it one
   fi
   parent_of "$b"
-  if [[ -n "$REPLY" ]] && ! has_local "$REPLY"; then marks+="!"; fi
-  [[ -n "$marks" ]] && marks=" [$marks]"
+  if [[ -n "$REPLY" ]] && ! has_local "$REPLY"; then marks+="orphan "; fi
+  if [[ -n "$marks" ]]; then marks=" [${marks% }]"; fi
   if [[ "$b" == "$S_MAIN" ]]; then label=" [main]$label"; fi
   # An unfinished merge or rebase, the way git's own prompt reports it.
   state_of "$b" && label+=" [$REPLY]"

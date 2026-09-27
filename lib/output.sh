@@ -20,7 +20,7 @@ fmt_cmd() {
   printf '%s' "$out"
 }
 
-say()  { printf '%s$ %s%s\n' "$E_DIM" "$(fmt_cmd "$@")" "$E_RST" >&2; }
+say()  { [[ -z "${ENT_NO_SAY:-}" ]] || return 0; printf '%s$ %s%s\n' "$E_DIM" "$(fmt_cmd "$@")" "$E_RST" >&2; }
 
 note() {
   (( QUIET )) || printf '%s\n' "$*" >&2

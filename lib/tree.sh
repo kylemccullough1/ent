@@ -170,7 +170,10 @@ _tree_collect_children() {
 }
 
 # _tree_write: persist the in-memory arrays to .bare/ent.json atomically.
+# Under --dry-run nothing is written: every mutation still runs in memory, so
+# the rest of the command behaves the same, but the file is left alone.
 _tree_write() {
+  (( ${DRY_RUN:-0} )) && return 0
   local f="$(_tree_file)" tmp="$(_tree_file).tmp" i n child first
   {
     printf '{\n'
@@ -293,19 +296,53 @@ tree_type_of() {
   REPLY="${T_TYPE[$T_INDEX]}"
 }
 
+# _tree_drop <branch>: remove a node from the in-memory arrays and from its
+# parent's children. No lock, no write: callers hold the lock and save.
+_tree_drop() {
+  local branch="$1" parent i=0 c
+  local new_name=() new_type=() new_parent=() new_children=() new_worktree=() kids=()
+  _tree_index_of "$branch" || return 0
+  parent="${T_PARENT[$T_INDEX]}"
+  while (( i < ${#T_NAME[@]} )); do
+    if [[ "${T_NAME[$i]}" != "$branch" ]]; then
+      new_name+=("${T_NAME[$i]}")
+      new_type+=("${T_TYPE[$i]}")
+      new_parent+=("${T_PARENT[$i]}")
+      new_children+=("${T_CHILDREN[$i]}")
+      new_worktree+=("${T_WORKTREE[$i]}")
+    fi
+    i=$((i + 1))
+  done
+  # ${a[@]+...}: bash 3.2 treats an empty "${a[@]}" as unbound under set -u.
+  T_NAME=(${new_name[@]+"${new_name[@]}"})
+  T_TYPE=(${new_type[@]+"${new_type[@]}"})
+  T_PARENT=(${new_parent[@]+"${new_parent[@]}"})
+  T_CHILDREN=(${new_children[@]+"${new_children[@]}"})
+  T_WORKTREE=(${new_worktree[@]+"${new_worktree[@]}"})
+  if [[ -n "$parent" ]] && _tree_index_of "$parent"; then
+    for c in ${T_CHILDREN[$T_INDEX]}; do
+      [[ "$c" == "$branch" ]] || kids+=("$c")
+    done
+    T_CHILDREN[$T_INDEX]="${kids[@]+"${kids[*]}"}"
+  fi
+}
+
 # tree_add_node <branch> <type> <parent> <worktree>: add a node and persist.
+# A node left over for the same name is replaced. Git decides whether a branch
+# exists; a leftover node (say the branch was deleted with plain git) is stale
+# and must not block making the branch again.
 tree_add_node() {
-  local branch="$1" type="$2" parent="$3" worktree="$4"
+  local branch="$1" type="$2" parent="$3" worktree="$4" kids=""
   tree_lock
   tree_load
-  if _tree_index_of "$branch"; then
-    tree_unlock
-    die "node '$branch' already exists"
-  fi
+  # A replaced node keeps its children: re-adopting a branch whose folder was
+  # deleted must not cut its twigs loose.
+  if _tree_index_of "$branch"; then kids="${T_CHILDREN[$T_INDEX]}"; fi
+  _tree_drop "$branch"
   T_NAME+=("$branch")
   T_TYPE+=("$type")
   T_PARENT+=("$parent")
-  T_CHILDREN+=("")
+  T_CHILDREN+=("$kids")
   T_WORKTREE+=("$worktree")
   if [[ -n "$parent" ]] && _tree_index_of "$parent"; then
     if [[ -n "${T_CHILDREN[$T_INDEX]}" ]]; then
@@ -318,37 +355,12 @@ tree_add_node() {
   tree_unlock
 }
 
-# tree_remove_node <branch>: remove node and persist. Caller must remove children first.
+# tree_remove_node <branch>: remove node and persist. Caller must remove children
+# first (rm_tree does, deepest first). A name with no node is not an error.
 tree_remove_node() {
-  local branch="$1" parent i=0 new_name=() new_type=() new_parent=() new_children=() new_worktree=()
   tree_lock
   tree_load
-  _tree_index_of "$branch" || { tree_unlock; die "node '$branch' not found"; }
-  parent="${T_PARENT[$T_INDEX]}"
-  # Rebuild arrays without this node.
-  while (( i < ${#T_NAME[@]} )); do
-    if [[ "${T_NAME[$i]}" != "$branch" ]]; then
-      new_name+=("${T_NAME[$i]}")
-      new_type+=("${T_TYPE[$i]}")
-      new_parent+=("${T_PARENT[$i]}")
-      new_children+=("${T_CHILDREN[$i]}")
-      new_worktree+=("${T_WORKTREE[$i]}")
-    fi
-    i=$((i + 1))
-  done
-  T_NAME=("${new_name[@]}")
-  T_TYPE=("${new_type[@]}")
-  T_PARENT=("${new_parent[@]}")
-  T_CHILDREN=("${new_children[@]}")
-  T_WORKTREE=("${new_worktree[@]}")
-  # Remove from parent's children list.
-  if [[ -n "$parent" ]] && _tree_index_of "$parent"; then
-    local c kids=()
-    for c in ${T_CHILDREN[$T_INDEX]}; do
-      [[ "$c" == "$branch" ]] || kids+=("$c")
-    done
-    T_CHILDREN[$T_INDEX]="${kids[*]}"
-  fi
+  _tree_drop "$1"
   _tree_write
   tree_unlock
 }
@@ -362,23 +374,37 @@ tree_update_worktree() {
   tree_unlock
 }
 
-# tree_adopt_if_missing <branch>: if the Git branch exists but the node does not,
-# create the ent folder and add the node.
+# tree_adopt_if_missing <branch>: give an existing git branch with no live
+# worktree its ent folder, and record it. Called only when a command names the
+# branch (`ent branch <name>`, `ent go <name>`); read-only commands such as
+# `list` never create folders.
+#
+# Uses has_local / wt_path_of / load_state (state.sh), ent_core (paths.sh) and
+# run / worktree_bare_guard (run.sh). bash resolves them when this runs, and
+# git-ent has sourced all of them by then.
+#
+# It must run in the main shell, not inside $(...): it refreshes the state
+# snapshot at the end, and a subshell's refresh would be lost.
 tree_adopt_if_missing() {
-  local branch="$1" container core_dir parent type
-  if _tree_index_of "$branch"; then return 0; fi
-  if ! git -C "$ENT" show-ref -q --verify "refs/heads/$branch"; then
-    die "branch '$branch' not found"
+  local branch="$1" parent="" type="branch" core_dir worktree
+  wt_path_of "$branch" && return 0
+  has_local "$branch" || die "branch '$branch' not found"
+  if [[ "$branch" == "$T_CANOPY" ]]; then
+    type="canopy"
+  elif [[ "$branch" == twigs/* ]]; then
+    parent="$(git -C "$ENT" config --get "branch.$branch.entParent" 2>/dev/null || true)"
+    [[ -n "$parent" ]] || die "cannot adopt twig '$branch': no parent recorded (branch.$branch.entParent)"
+    type="twig"
   fi
-  parent=""
-  type="branch"
-  if [[ "$branch" == twigs/* ]]; then
-    die "cannot auto-adopt a twig without a recorded parent"
-  fi
-  container="$ENT/branches/$branch"
-  core_dir="$container/core"
+  # ent_core already knows where the branch belongs: the path the tree recorded
+  # for it, or the layout's default when there is no record.
+  core_dir="$(ent_core "$branch")"
+  worktree="${core_dir#"$ENT"/}"
   [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
-  mkdir -p "$container/twigs"
-  git -C "$ENT" worktree add "$core_dir" "$branch" >&2
-  tree_add_node "$branch" "$type" "$parent" "branches/$branch/core"
+  run mkdir -p "${core_dir%/core}/twigs"
+  # No -b: the branch is already there, we are only checking it out.
+  run git -C "$ENT" worktree add "$core_dir" "$branch"
+  worktree_bare_guard "$core_dir"
+  tree_add_node "$branch" "$type" "$parent" "$worktree"
+  (( DRY_RUN )) || load_state
 }

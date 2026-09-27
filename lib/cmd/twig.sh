@@ -55,6 +55,7 @@ cmd_twig() {
   run mkdir -p "$container"
   run git -C "$ENT" worktree add --no-track -b "$branch" "$core_dir" "$parent"
   worktree_bare_guard "$core_dir"
+  tree_add_node "$branch" twig "$parent" "branches/$parent/twigs/$name/core"
   run git -C "$ENT" config "branch.$branch.entParent" "$parent"
   emit_path "$core_dir" "Created twig $branch at $core_dir"
 }

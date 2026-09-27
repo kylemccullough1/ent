@@ -49,6 +49,7 @@ rm_one() {
   elif merged_into_parent "$b" || (( FORCE )); then run git -C "$ENT" branch -D "$b"
   else die "branch '$b' is not fully merged; pass --force to delete"; fi
   git -C "$ENT" config --unset "branch.$b.entParent" >/dev/null 2>&1 || true
+  tree_remove_node "$b"
   rmdir "$container/twigs" 2>/dev/null || true
   rmdir "$container" 2>/dev/null || true
   # branches/feature/x leaves an empty branches/feature behind

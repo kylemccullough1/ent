@@ -45,8 +45,8 @@ load_state() {
     esac
   done < <(git -C "$ENT" for-each-ref --format='%(refname)' refs/heads refs/remotes)
 
-  # 3. worktrees from git (still needed to resolve cwd -> branch accurately,
-  # especially while the node tree is being populated by older commands).
+  # 3. worktrees from git: where each branch is checked out right now (see
+  # wt_path_of), and which folder the current directory belongs to.
   while IFS= read -r ref; do
     case "$ref" in
       "worktree "*) path="${ref#worktree }" ;;
@@ -105,17 +105,29 @@ state_cfg() {
 }
 
 # parent_of <branch>: REPLY = the twig's parent, or empty for main and branches.
+# A branch with no node (made with plain git) has no parent. `|| true` matters:
+# under set -e a bare failing lookup would end the whole command silently.
 parent_of() {
   state_ready
-  tree_parent_of "$1"; REPLY="$REPLY"
+  tree_parent_of "$1" || true
 }
 
-# wt_path_of <branch>: REPLY = the branch's absolute worktree path.
-# Returns 1 if the branch is not managed by the node tree.
+# wt_path_of <branch>: REPLY = where the branch is checked out right now,
+# according to git. Returns 1 when it is checked out nowhere.
+#
+# This asks git, not the node tree, on purpose. The tree records where ent put
+# the worktree; git knows where it is. A folder deleted by hand (then pruned),
+# or moved with `git worktree move`, leaves the tree's record stale, and every
+# caller here (list, merge, sync, the viewer) needs the live answer. Comparing
+# the two is how `list` spots [relocated]. Read-only: it never creates folders.
 wt_path_of() {
   state_ready
-  tree_worktree_of "$1" || { REPLY=""; return 1; }
-  REPLY="$ENT/$REPLY"
+  local i=0
+  while (( i < ${#S_WT_BRANCH[@]} )); do
+    if [[ "${S_WT_BRANCH[$i]}" == "$1" ]]; then REPLY="${S_WT_PATH[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  REPLY=""; return 1
 }
 
 # children_of <branch>: REPLY_LIST = its immediate children, in file order.
