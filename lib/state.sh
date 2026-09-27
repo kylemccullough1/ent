@@ -104,8 +104,9 @@ state_cfg() {
   REPLY=""; return 1
 }
 
-# parent_of <branch>: REPLY = the twig's parent, or empty for main and branches.
-# A branch with no node (made with plain git) has no parent. `|| true` matters:
+# parent_of <branch>: REPLY = the ent parent: a twig's branch, the canopy for a
+# branch, empty for the canopy itself. A branch with no node (made with plain
+# git) has no parent yet. `|| true` matters:
 # under set -e a bare failing lookup would end the whole command silently.
 parent_of() {
   state_ready
@@ -137,7 +138,8 @@ children_of() {
   REPLY_LIST=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
 }
 
-# top_branches: REPLY_LIST = branches with no parent, excluding the default branch.
+# top_branches: REPLY_LIST = the branches directly under the canopy: parent is the
+# canopy, or none yet (no node), excluding the canopy itself.
 # A twig whose parent branch was deleted counts too, so it is never hidden.
 top_branches() {
   state_ready
@@ -145,7 +147,7 @@ top_branches() {
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
     [[ "$b" == "$S_MAIN" ]] && continue
     parent_of "$b"
-    if [[ -z "$REPLY" ]] || ! has_local "$REPLY"; then list+=("$b"); fi
+    if [[ -z "$REPLY" || "$REPLY" == "$S_MAIN" ]] || ! has_local "$REPLY"; then list+=("$b"); fi
   done
   REPLY_LIST=(${list[@]+"${list[@]}"})
 }

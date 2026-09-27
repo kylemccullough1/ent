@@ -87,8 +87,10 @@ ent_container() {
   fi
   # No node, or a node with no recorded worktree (a branch made with plain git):
   # the layout says where it would go.
+  # Only a twig nests under its parent; a branch sits under branches/ even
+  # though its parent is the canopy.
   parent_of "$1"
-  if [[ -z "$REPLY" ]]; then
+  if [[ "$1" != twigs/* || -z "$REPLY" ]]; then
     printf '%s/branches/%s' "$ENT" "$1"
   else
     local p="$REPLY" twig; twig="$(ent_twigname "$1")"
@@ -106,10 +108,11 @@ ent_core() {
   printf '%s/core' "$(ent_container "$1")"
 }
 
-# ent_parent_core <branch>: the parent's core/, or the ent root for a top-level branch.
+# ent_parent_core <branch>: a twig's parent core/, or the ent root for a branch
+# (whose parent, the canopy, is a sibling on disk rather than an enclosing folder).
 ent_parent_core() {
   parent_of "$1"
-  if [[ -n "$REPLY" ]]; then ent_core "$REPLY"; else printf '%s' "$ENT"; fi
+  if [[ "$1" == twigs/* && -n "$REPLY" ]]; then ent_core "$REPLY"; else printf '%s' "$ENT"; fi
 }
 
 # _branch_at_cwd <strip>: the checked-out branch whose folder holds the current

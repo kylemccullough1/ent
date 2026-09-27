@@ -43,8 +43,7 @@ cmd_twig() {
   # A twig's name is already twigs/<branch>/<twig>, and git refuses to create
   # twigs/<branch>/<twig>/<name> while twigs/<branch>/<twig> is a branch: one name
   # cannot be both a ref and a folder of refs.
-  parent_of "$parent"
-  if [[ -n "$REPLY" || "$parent" == twigs/* ]]; then
+  if [[ "$parent" == twigs/* ]]; then
     die "'$parent' is a twig, and twigs go one level deep: git cannot create a branch under '$parent' while that name is itself a branch"
   fi
   check_new_name "$branch"

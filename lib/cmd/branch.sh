@@ -85,6 +85,6 @@ cmd_branch() {
   run mkdir -p "$ENT/branches/$branch/twigs"
   run git -C "$ENT" worktree add "$track_arg" -b "$branch" "$core_dir" "$base"
   worktree_bare_guard "$core_dir"
-  tree_add_node "$branch" branch "" "branches/$branch/core"
+  tree_add_node "$branch" branch "$S_MAIN" "branches/$branch/core"
   emit_path "$core_dir" "Created branch $branch at $core_dir"
 }

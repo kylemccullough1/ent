@@ -34,8 +34,10 @@ list_node() {
   # An unfinished merge or rebase, the way git's own prompt reports it.
   state_of "$b" && label+=" [$REPLY]"
   printf '%s%s%s%s\n' "$indent" "$b" "$marks" "$label"
-  children_of "$b"
-  kids=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
+  # The canopy's children are the branches, which cmd_list draws itself from
+  # top_branches (that also covers branches with no node yet).
+  kids=()
+  if [[ "$b" != "$S_MAIN" ]]; then children_of "$b"; kids=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"}); fi
   for child in ${kids[@]+"${kids[@]}"}; do
     list_node "$child" "$indent  " "$container/twigs/${child##*/}"
   done

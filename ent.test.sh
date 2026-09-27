@@ -112,6 +112,30 @@ grep -q "rebuilding it from git" "$T/err" && pass "warns about the damaged file"
 [[ -f "$ENT/.bare/ent.json.bad" ]] && pass "damaged file kept as ent.json.bad" || fail "damaged file not kept"
 check "main" "$(tree_canopy)" "rebuilt tree has the canopy"
 
+step "a branch recorded with no parent is read as a child of the canopy"
+cat >"$ENT/.bare/ent.json" <<'JSON'
+{
+  "canopy": "main",
+  "nodes": {
+    "main": {
+      "type": "canopy",
+      "parent": null,
+      "children": [],
+      "worktree": "main/core"
+    },
+    "feature/y": {
+      "type": "branch",
+      "parent": null,
+      "children": [],
+      "worktree": "branches/feature/y/core"
+    }
+  }
+}
+JSON
+tree_load
+tree_parent_of "feature/y"; check "main" "$REPLY" "old null parent becomes the canopy"
+tree_children_of "main"; check "feature/y" "${REPLY_LIST[*]}" "and the canopy lists it as a child"
+
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
 [[ -d "$T/fresh/.bare" && -d "$T/fresh/main/core" ]] && pass "layout .bare + main/core" || fail "layout"
@@ -270,6 +294,21 @@ grep -q '"twigs/again/tw"' "$T/auto/.bare/ent.json" && fail "removed twig still 
 ent "$T/auto" rm -y again >/dev/null 2>&1
 expect_ok "a removed branch can be made again" ent "$T/auto" branch again
 [[ -d "$T/auto/branches/again/core" ]] && pass "re-created branch has its folder" || fail "re-created branch has no folder"
+
+step "a branch's parent is the canopy"
+# node_parent <ent> <name>: the "parent" value recorded for a node in ent.json.
+node_parent() { awk -v n="\"$2\": {" 'index($0, n) {f=1} f && /"parent"/ {sub(/^[^:]*: */, ""); sub(/,$/, ""); print; exit}' "$1/.bare/ent.json"; }
+check '"main"' "$(node_parent "$T/auto" from-plain-git)" "bootstrap gives a branch the canopy as parent"
+check '"main"' "$(node_parent "$T/auto" again)" "ent branch records the canopy as parent"
+check "null" "$(node_parent "$T/auto" main)" "the canopy itself has no parent"
+grep -A4 '"main": {' "$T/auto/.bare/ent.json" | grep -q '"again"' && pass "the canopy lists the branch as a child" || fail "canopy children: $(grep -A4 '"main": {' "$T/auto/.bare/ent.json")"
+out=$(ent "$T/auto" list)
+check "1" "$(echo "$out" | grep -c '^again')" "list draws each branch once"
+check "$(Norm "$T/auto")" "$(ent "$T/auto/branches/again/core" up)" "up from a branch still goes to the ent root"
+expect_fail "down from main/core offers the branches" "Multiple choices" ent "$T/auto/main/core" down
+check "$(Norm "$T/auto")/branches/again/core" "$(ent "$T/auto/main/core" down again)" "down <branch> from main/core"
+ent "$T/auto/branches/again/core" twig leaf >/dev/null 2>&1
+check '"again"' "$(node_parent "$T/auto" twigs/again/leaf)" "a twig's parent is still its branch"
 
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz

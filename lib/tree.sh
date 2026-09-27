@@ -153,7 +153,30 @@ tree_load() {
     mv -f "$f" "$f.bad" 2>/dev/null || true
     T_CANOPY="main"; T_NAME=(); T_TYPE=(); T_PARENT=(); T_CHILDREN=(); T_WORKTREE=()
     tree_bootstrap
+    return 0
   fi
+
+  _tree_canopy_parents
+}
+
+# _tree_canopy_parents: files written before branches recorded the canopy as
+# their parent have "parent": null on branches. Fix that in memory: each such
+# branch gets the canopy as parent and joins the canopy's children. The next
+# save writes the corrected form.
+_tree_canopy_parents() {
+  local i=0 ci
+  _tree_index_of "$T_CANOPY" || return 0
+  ci="$T_INDEX"
+  while (( i < ${#T_NAME[@]} )); do
+    if [[ "${T_TYPE[$i]}" == branch && -z "${T_PARENT[$i]}" ]]; then
+      T_PARENT[$i]="$T_CANOPY"
+      case " ${T_CHILDREN[$ci]} " in
+        *" ${T_NAME[$i]} "*) ;;
+        *) T_CHILDREN[$ci]="${T_CHILDREN[$ci]:+${T_CHILDREN[$ci]} }${T_NAME[$i]}" ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
 }
 
 # _tree_collect_children <parent>: print space-separated child names.
@@ -215,12 +238,15 @@ tree_bootstrap() {
   fi
   [[ -n "$T_CANOPY" ]] || T_CANOPY="main"
 
-  # Build nodes from local branches and known parents.
+  # Build nodes from local branches and known parents. A twig's parent is the
+  # branch recorded in entParent; every other branch hangs off the canopy.
   while read -r branch; do
     [[ -n "$branch" ]] || continue
     parent=""
     if [[ "$branch" == twigs/* ]]; then
       parent="$(git -C "$ENT" config --get "branch.$branch.entParent" 2>/dev/null || true)"
+    elif [[ "$branch" != "$T_CANOPY" ]]; then
+      parent="$T_CANOPY"
     fi
     T_NAME+=("$branch")
     if [[ "$branch" == "$T_CANOPY" ]]; then T_TYPE+=("canopy")
@@ -240,14 +266,14 @@ tree_bootstrap() {
     i=$((i + 1))
   done
 
-  # Fill worktree paths from git worktree list.
+  # Fill worktree paths from git worktree list. substr, not $2: a worktree path
+  # may contain spaces.
   while read -r wt_tmp; do
     IFS=' ' read -r branch path <<<"$wt_tmp"
     [[ "$branch" == refs/heads/* ]] || continue
     branch="${branch#refs/heads/}"
     _tree_index_of "$branch" || continue
     T_WORKTREE[$T_INDEX]="$(_rel_path "$ENT" "$path")"
-  # substr, not $2: a worktree path may contain spaces.
   done < <(git -C "$ENT" worktree list --porcelain | awk '/^worktree /{p=substr($0, 10)} /^branch /{print $2 " " p}')
 
   # Ensure the canopy node exists even if no branches were found.
@@ -255,7 +281,7 @@ tree_bootstrap() {
     T_NAME=("$T_CANOPY" ${T_NAME[@]+"${T_NAME[@]}"})
     T_TYPE=("canopy" ${T_TYPE[@]+"${T_TYPE[@]}"})
     T_PARENT=("" ${T_PARENT[@]+"${T_PARENT[@]}"})
-    T_CHILDREN=("" ${T_CHILDREN[@]+"${T_CHILDREN[@]}"})
+    T_CHILDREN=("$(_tree_collect_children "$T_CANOPY")" ${T_CHILDREN[@]+"${T_CHILDREN[@]}"})
     T_WORKTREE=("main/core" ${T_WORKTREE[@]+"${T_WORKTREE[@]}"})
   fi
 
@@ -395,6 +421,8 @@ tree_adopt_if_missing() {
     parent="$(git -C "$ENT" config --get "branch.$branch.entParent" 2>/dev/null || true)"
     [[ -n "$parent" ]] || die "cannot adopt twig '$branch': no parent recorded (branch.$branch.entParent)"
     type="twig"
+  else
+    parent="$T_CANOPY"   # a branch hangs off the canopy
   fi
   # ent_core already knows where the branch belongs: the path the tree recorded
   # for it, or the layout's default when there is no record.
