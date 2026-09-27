@@ -59,6 +59,15 @@ cmd_down() {
 # for it, and emitting a path that is not there just makes the shell wrapper
 # fail at `cd`.
 go_emit() {
+  # Checked out somewhere else (moved with `git worktree move`): record where it
+  # lives now, so ent_core, twig and rm find it there too, and go to it.
+  if wt_path_of "$1"; then
+    local live="$REPLY"
+    if tree_node_exists "$1" && [[ "$live" != "$(ent_core "$1")" ]]; then
+      tree_update_worktree "$1" "$(_rel_path "$ENT" "$live")"
+    fi
+    emit_path "$live"; return
+  fi
   tree_adopt_if_missing "$1"
   emit_path "$(ent_core "$1")"
 }

@@ -3,6 +3,7 @@
 help_list() { cat <<'EOF'
 list                                   show branches and twigs as a tree
   Markers:  [relocated] checked out somewhere other than its ent folder
+                        (`ent go <branch>` records the new place)
             [orphan] its parent branch no longer exists
             [no worktree] the branch has no folder (`ent go <branch>` makes one)
             [MERGING] / [REBASING] / ... an operation is unfinished there

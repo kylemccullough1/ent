@@ -321,6 +321,29 @@ check "$(Norm "$T/auto")/branches/again/core" "$(ent "$T/auto/main/core" down ag
 ent "$T/auto/branches/again/core" twig leaf >/dev/null 2>&1
 check '"again"' "$(node_parent "$T/auto" twigs/again/leaf)" "a twig's parent is still its branch"
 
+step "main has branches, not twigs"
+expect_fail "twig --from main refused" "children are branches" ent "$T/auto" twig side --from main
+
+step "a twig made with plain git is adopted under its real parent"
+# node_worktree <ent> <name>: the "worktree" value recorded for a node in ent.json.
+node_worktree() { awk -v n="\"$2\": {" 'index($0, n) {f=1} f && /"worktree"/ {sub(/^[^:]*: */, ""); print; exit}' "$1/.bare/ent.json"; }
+git -C "$T/auto/.bare" branch twigs/again/hand again
+git -C "$T/auto/.bare" config branch.twigs/again/hand.entParent again
+check "$(Norm "$T/auto")/branches/again/twigs/hand/core" "$(ent "$T/auto" go twigs/again/hand 2>/dev/null)" "go adopts the twig under its parent's container"
+check '"branches/again/twigs/hand/core"' "$(node_worktree "$T/auto" twigs/again/hand)" "the adopted twig records that folder"
+
+step "go follows a worktree moved with git worktree move"
+ent "$T/auto" branch mover >/dev/null 2>&1
+mkdir -p "$T/auto/elsewhere"
+git -C "$T/auto/.bare" worktree move "$T/auto/branches/mover/core" "$T/auto/elsewhere/core"
+ent "$T/auto" list | grep -q '^mover \[relocated\]' && pass "list flags the moved worktree" || fail "list did not flag the move: $(ent "$T/auto" list)"
+check "$(Norm "$T/auto")/elsewhere/core" "$(ent "$T/auto" go mover 2>/dev/null)" "go lands on the moved worktree"
+check '"elsewhere/core"' "$(node_worktree "$T/auto" mover)" "go recorded the new place"
+ent "$T/auto" list | grep -q '^mover \[relocated\]' && fail "still relocated after go" || pass "list is quiet once go recorded the move"
+ent "$T/auto" twig t --from mover >/dev/null 2>&1
+[[ -d "$T/auto/elsewhere/twigs/t/core" ]] && pass "a twig of the moved branch nests beside it" || fail "twig of moved branch not at elsewhere/twigs/t/core"
+check '"elsewhere/twigs/t/core"' "$(node_worktree "$T/auto" twigs/mover/t)" "the twig records the folder it was made in"
+
 step "old add verb is gone"
 expect_fail "add is unknown" "unknown verb" ent "$T/g1" add feature/xyz
 

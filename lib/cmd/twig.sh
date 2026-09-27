@@ -25,6 +25,7 @@ cmd_twig() {
     [[ "$parent" != "$S_MAIN" ]] || die "ent twig <name> must be inside a branch, or use --from"
   fi
   has_local "$parent" || die "branch '$parent' not found"
+  [[ "$parent" != "$S_MAIN" ]] || die "$S_MAIN's children are branches, not twigs: use \`ent branch $name\`"
   branch="twigs/$parent/$name"
   # A twig's name is already twigs/<branch>/<twig>, and git refuses to create
   # twigs/<branch>/<twig>/<name> while twigs/<branch>/<twig> is a branch: one name
@@ -40,7 +41,7 @@ cmd_twig() {
   run mkdir -p "$container"
   run git -C "$ENT" worktree add --no-track -b "$branch" "$core_dir" "$parent"
   worktree_bare_guard "$core_dir"
-  tree_add_node "$branch" twig "$parent" "branches/$parent/twigs/$name/core"
+  tree_add_node "$branch" twig "$parent" "${core_dir#"$ENT"/}"
   run git -C "$ENT" config "branch.$branch.entParent" "$parent"
   emit_path "$core_dir" "Created twig $branch at $core_dir"
 }

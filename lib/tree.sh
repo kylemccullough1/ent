@@ -424,9 +424,14 @@ tree_adopt_if_missing() {
   else
     parent="$T_CANOPY"   # a branch hangs off the canopy
   fi
-  # ent_core already knows where the branch belongs: the path the tree recorded
-  # for it, or the layout's default when there is no record.
-  core_dir="$(ent_core "$branch")"
+  # ent_core knows where a recorded branch belongs. A twig with no node yet
+  # would get no parent from the tree, so build its path from the parent read
+  # above, the same way `ent twig` does.
+  if [[ "$type" == twig ]] && ! tree_node_exists "$branch"; then
+    core_dir="$(ent_container "$parent")/twigs/$(ent_twigname "$branch")/core"
+  else
+    core_dir="$(ent_core "$branch")"
+  fi
   worktree="${core_dir#"$ENT"/}"
   [[ -e "$core_dir" ]] && die "core directory already exists: $core_dir"
   run mkdir -p "${core_dir%/core}/twigs"
