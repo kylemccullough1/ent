@@ -250,7 +250,12 @@ Outside an ent the helper runs no programs at all, so it never slows your prompt
 | File | Job |
 |---|---|
 | `git-ent` | Finds `lib/`, loads it, and dispatches the verb. |
-| `lib/core.sh` | Output (`say`, `note`, `warn`, `die`), `run`, `confirm`, flag parsing. |
+| `lib/output.sh` | Messages on stderr (`note`, `warn`, `die`), `emit_path`, and `say`, which lists git commands under `-n` only. |
+| `lib/args.sh` | Global flags (`-n`, `-v`, `-q`, `-y`, `-h`); each verb parses its own flags in `parse_<verb>_args`. |
+| `lib/run.sh` | `run` (skipped under `-n`) and the sparse-checkout guard for new worktrees. |
+| `lib/prompt.sh` | `confirm` and `choose`. |
+| `lib/log.sh` | Appends messages to `.bare/ent.log`, or `~/.config/ent/global.log` outside an ent. |
+| `lib/tree.sh` | `.bare/ent.json`: which branches and twigs ent manages, their parents, and where their folders go. |
 | `lib/state.sh` | Reads git's state once (3 git calls) into arrays; all lookups use them. |
 | `lib/paths.sh` | Where things live: `ent_root`, `ent_container`, which branch owns a folder. |
 | `lib/config.sh` | Settings layers and `.entrc`. |

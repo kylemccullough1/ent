@@ -20,7 +20,10 @@ fmt_cmd() {
   printf '%s' "$out"
 }
 
-say()  { [[ -z "${ENT_NO_SAY:-}" ]] || return 0; printf '%s$ %s%s\n' "$E_DIM" "$(fmt_cmd "$@")" "$E_RST" >&2; }
+# say: show a command ent would run. Only under --dry-run, where the list of
+# commands is the whole point of the output; a normal run stays quiet and lets
+# note/emit_path report what happened.
+say()  { (( ${DRY_RUN:-0} )) || return 0; printf '%s$ %s%s\n' "$E_DIM" "$(fmt_cmd "$@")" "$E_RST" >&2; }
 
 note() {
   (( QUIET )) || printf '%s\n' "$*" >&2

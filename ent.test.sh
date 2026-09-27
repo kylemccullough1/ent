@@ -6,7 +6,6 @@ G="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-ent"
 T="$(mktemp -d)"
 export GIT_CONFIG_GLOBAL="$T/gitconfig" NO_COLOR=1 GIT_CONFIG_NOSYSTEM=1
 export PATH="$(dirname "$G"):$PATH"
-export ENT_NO_SAY=1
 
 git config --global user.name t
 git config --global user.email t@x
@@ -209,6 +208,14 @@ expect_fail "branch without name" "usage" ent "$T/g1" branch
 
 step "branch rejects unknown flags"
 expect_fail "branch unknown option" "unknown branch option" ent "$T/g1" branch foo --bogus
+
+step "git commands are echoed only under --dry-run"
+ent "$T/g1" branch echo-quiet >/dev/null 2>"$T/err"
+grep -q '^\$ git' "$T/err" && fail "a normal run echoed a git command: $(grep '^\$ git' "$T/err" | head -1)" || pass "a normal run echoes no git commands"
+grep -q "Created branch echo-quiet" "$T/err" && pass "a normal run still reports what it did" || fail "no report: $(cat "$T/err")"
+ent "$T/g1" -n branch echo-dry >/dev/null 2>"$T/err"
+grep -q '^\$ git .*worktree add' "$T/err" && pass "a dry run lists the git commands it would run" || fail "dry run showed no commands: $(cat "$T/err")"
+[[ ! -e "$T/g1/branches/echo-dry" ]] && pass "and still changes nothing" || fail "dry run created a folder"
 
 step "canopy config key replaces ent.main"
 check "main" "$(git -C "$T/g1/.bare" config ent.canopy)" "canopy recorded"
