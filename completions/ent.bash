@@ -48,28 +48,43 @@ _git_ent() { _git_ent_complete 2; }
 # Install.sh will source this file; if it is sourced twice, the function is replaced harmlessly.
 ent() {
   # Help and dry runs print text, not a folder: just show it.
-  local a
+  local a p="" rc here=""
   for a in "$@"; do
     case "$a" in -h|--help|-n|--dry-run) git ent "$@"; return ;; esac
   done
-  case "${1:-}" in
-    init|branch|twig|go|up|down)
-      local p
-      p="$(git ent "$@")" || return $?
-      if [[ -n "$p" ]]; then cd "$p"; fi ;;
-    *) git ent "$@" ;;
+  # branch merge, rm and sync can delete the folder you are standing in. Windows
+  # will not delete a folder any process has as its current folder, and both this
+  # shell and the git.exe that `git ent` starts would be sitting in it. So run
+  # them from the ent root; ENT_PWD tells git-ent where you really were.
+  case "${1:-}/${2:-}" in
+    branch/merge|rm/*|sync/*) if __ent_root; then here="$PWD"; cd "$__ENT_ROOT" || return; fi ;;
   esac
+  case "${1:-}" in
+    init|branch|twig|go|up|down) p="$(ENT_PWD="$here" git ent "$@")"; rc=$? ;;
+    *) ENT_PWD="$here" git ent "$@"; rc=$? ;;
+  esac
+  if (( rc == 0 )) && [[ -n "$p" ]]; then cd "$p"
+  elif [[ -n "$here" ]]; then
+    # Back where you were, unless that folder was just removed.
+    if [[ -d "$here" ]]; then cd "$here"; else echo "ent: $here was removed; you are at $__ENT_ROOT" >&2; fi
+  fi
+  return $rc
 }
 
 # ---------- prompt ----------
 # __ent_in_ent: true when an ent root sits above the current folder: both .bare
 # (the git database) and the .git pointer file, so a stray .bare does not count.
 # Uses only shell builtins (no processes), so prompts outside an ent cost nothing.
-__ent_in_ent() {
+# __ent_root sets __ENT_ROOT to that root, for the wrapper above.
+__ent_root() {
   local d="$PWD"
-  while [[ -n "$d" ]]; do [[ -d "$d/.bare" && -f "$d/.git" ]] && return 0; d="${d%/*}"; done
+  while [[ -n "$d" ]]; do
+    if [[ -d "$d/.bare" && -f "$d/.git" ]]; then __ENT_ROOT="$d"; return 0; fi
+    d="${d%/*}"
+  done
   return 1
 }
+__ent_in_ent() { __ent_root; }
 
 # __ent_ps1 [format]: the ent branch that owns the current folder ("ent" at the
 # ent root), printed through format (default "%s"). Prints nothing outside an ent.

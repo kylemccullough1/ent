@@ -123,7 +123,10 @@ _branch_at_cwd() {
   root="$(ent_root 2>/dev/null)" || return 1
   local ENT="$root"
   state_ready
-  cwd="$(ent_norm "$PWD")"
+  # The ent wrapper runs branch merge / rm / sync from the ent root (Windows will
+  # not delete a folder a process is standing in) and passes the folder you were
+  # really in as ENT_PWD.
+  cwd="$(ent_norm "${ENT_PWD:-$PWD}")"
   while (( i < ${#S_WT_BRANCH[@]} )); do
     dir="${S_WT_PATH[$i]}"
     [[ -n "$strip" ]] && dir="${dir%"$strip"}"

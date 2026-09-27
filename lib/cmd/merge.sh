@@ -43,7 +43,7 @@ do_merge() {
 merge_abort_or_continue() {
   (( MERGE_ABORT || MERGE_CONTINUE )) || return 1
   local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  top="$(git -C "${ENT_PWD:-$PWD}" rev-parse --show-toplevel 2>/dev/null || true)"
   [[ -n "$top" ]] || die "run from inside the worktree that is mid-merge"
   mid_merge "$top" || die "no merge in progress in $top"
   if (( MERGE_ABORT )); then run git -C "$top" merge --abort
@@ -71,8 +71,10 @@ cmd_merge() {
   do_merge "$src" "$target" || return 1
   local target_core; target_core="$(ent_core "$target")"
   cd "$ENT"   # step out of the folder that is about to be removed
+  RM_LEFTOVER=()
   rm_tree "$src"
-  emit_path "$target_core" "Merged and finished $src"
+  if (( ${#RM_LEFTOVER[@]} )); then emit_path "$target_core" "Merged $src; its folder is still there (see above)"
+  else emit_path "$target_core" "Merged and finished $src"; fi
 }
 
 # merge_twigs_up <branch>: merge every twig below <branch> into its parent,

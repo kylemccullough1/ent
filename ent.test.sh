@@ -5,7 +5,10 @@ set -uo pipefail
 G="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-ent"
 T="$(mktemp -d)"
 export GIT_CONFIG_GLOBAL="$T/gitconfig" NO_COLOR=1 GIT_CONFIG_NOSYSTEM=1
-export PATH="$(dirname "$G"):$PATH"
+# Started from a C:/... folder, $G is spelled C:/..., and that colon splits a
+# PATH entry: `git ent` would then find an installed copy instead of this one.
+_bin="$(dirname "$G")"; if command -v cygpath >/dev/null 2>&1; then _bin="$(cygpath -u "$_bin")"; fi
+export PATH="$_bin:$PATH"; unset _bin
 
 git config --global user.name t
 git config --global user.email t@x
@@ -642,6 +645,32 @@ printf 'y\ny\n' | ent "$T/g1/branches/feature/merge-test/core" branch merge >/de
 [[ -f "$T/g1/main/core/hello.txt" ]] && pass "merge into main landed" || fail "merge into main landed"
 [[ ! -d "$T/g1/branches/feature/merge-test" ]] && pass "merge finish removed worktree" || fail "merge finish removed worktree"
 
+step "the ent wrapper steps out before branch merge"
+# Through the real wrapper and `git ent`, the way you run it: on Windows the
+# git.exe that `git ent` starts would otherwise hold the folder open.
+ent "$T/g1" branch feature/wrap >/dev/null 2>&1
+printf w >"$T/g1/branches/feature/wrap/core/w.txt"
+(cd "$T/g1/branches/feature/wrap/core" && git add w.txt && git commit -qm w)
+out="$(cd "$T/g1/branches/feature/wrap/core" && source "$(dirname "$G")/completions/ent.bash" \
+       && ent branch merge -y >/dev/null 2>&1; Norm "$PWD")"
+check "$(Norm "$T/g1/main/core")" "$out" "wrapper lands in the parent after merge"
+[[ -f "$T/g1/main/core/w.txt" ]] && pass "wrapper merge landed" || fail "wrapper merge landed"
+[[ ! -d "$T/g1/branches/feature/wrap" ]] && pass "wrapper merge removed the folder" || fail "wrapper merge removed the folder"
+out="$(cd "$T/g1/branches/feature/merge" && source "$(dirname "$G")/completions/ent.bash" \
+       && ent rm -y feature/never >/dev/null 2>&1; Norm "$PWD")"
+check "$(Norm "$T/g1/branches/feature/merge")" "$out" "wrapper brings you back after rm"
+
+step "plain git ent branch merge from inside the branch"
+ent "$T/g1" branch feature/plain >/dev/null 2>&1
+err="$(cd "$T/g1/branches/feature/plain/core" && git ent branch merge -y 2>&1 >/dev/null)"
+git -C "$T/g1" show-ref --verify -q refs/heads/feature/plain && fail "the merged branch is deleted" || pass "the merged branch is deleted"
+if windows_only "git.exe keeps the folder; rm clears it after"; then
+  echo "$err" | grep -q "could not delete" && pass "warns about the folder it could not delete" || fail "warns about the folder: $err"
+  [[ -d "$T/g1/branches/feature/plain/core" ]] && pass "the folder is left for rm" || fail "the folder is left for rm"
+  expect_ok "rm clears it afterwards" ent "$T/g1" rm -y feature/plain
+fi
+[[ ! -d "$T/g1/branches/feature/plain" ]] && pass "nothing of it is left" || fail "nothing of it is left"
+
 step "sync: setup (origin R, ent E with one branch per case)"
 R="$T/syncR"
 mkdir "$R" && (cd "$R" && git init -q -b main . && echo a >a.txt && echo c >c.txt && git add . && git commit -qm init)
@@ -1121,6 +1150,51 @@ ent "$T/g1" branch feature/lonely2 >/dev/null 2>&1
 rm -rf "$T/g1/branches/feature/lonely2"; git -C "$T/g1" worktree prune
 ent "$T/g1" branch feature/lonely2 >/dev/null 2>&1
 check "feature/lonely2" "$(git -C "$T/g1/branches/feature/lonely2/core" branch --show-current 2>/dev/null)" "branch <name> also gives it its folder back"
+
+step "rm removes a branch in any state"
+has_ref() { git -C "$T/g1" show-ref --verify -q "refs/heads/$1"; }
+# B: a folder git no longer lists, empty (what a failed remove leaves)
+ent "$T/g1" branch feature/husk >/dev/null 2>&1
+rm -rf "$T/g1/branches/feature/husk/core" && mkdir "$T/g1/branches/feature/husk/core"
+git -C "$T/g1" worktree prune
+out="$(ent "$T/g1" rm -y feature/husk 2>&1 >/dev/null)"
+echo "$out" | grep -qF "feature/husk  (leftover folder (not a worktree), branch)" \
+  && pass "the preview names the leftover folder" || fail "the preview names the leftover folder: $out"
+[[ ! -d "$T/g1/branches/feature/husk" ]] && pass "rm clears an empty non-worktree folder" || fail "rm clears an empty non-worktree folder"
+has_ref feature/husk && fail "husk branch deleted" || pass "husk branch deleted"
+# B': the same, but files remain that no worktree owns: needs -f
+ent "$T/g1" branch feature/husk2 >/dev/null 2>&1
+rm -f "$T/g1/branches/feature/husk2/core/.git"; git -C "$T/g1" worktree prune
+printf x >"$T/g1/branches/feature/husk2/core/keep.txt"
+expect_fail "leftover files need -f" "still holds files" ent "$T/g1" rm -y feature/husk2
+[[ -f "$T/g1/branches/feature/husk2/core/keep.txt" ]] && pass "the refusal deleted nothing" || fail "the refusal deleted nothing"
+expect_ok "and -f takes them" ent "$T/g1" rm -y -f feature/husk2
+[[ ! -d "$T/g1/branches/feature/husk2" ]] && pass "husk2 folder gone" || fail "husk2 folder gone"
+# C: still registered, but the folder was deleted by hand and never pruned
+ent "$T/g1" branch feature/ghost >/dev/null 2>&1; rm -rf "$T/g1/branches/feature/ghost"
+expect_ok "rm prunes a worktree whose folder is gone" ent "$T/g1" rm -y feature/ghost
+has_ref feature/ghost && fail "ghost branch deleted" || pass "ghost branch deleted"
+# D: a branch with no worktree and no folder
+ent "$T/g1" branch feature/bare1 >/dev/null 2>&1
+rm -rf "$T/g1/branches/feature/bare1"; git -C "$T/g1" worktree prune
+expect_ok "rm takes a branch with no worktree" ent "$T/g1" rm -y feature/bare1
+has_ref feature/bare1 && fail "bare1 branch deleted" || pass "bare1 branch deleted"
+# E: moved with git worktree move
+ent "$T/g1" branch feature/moved >/dev/null 2>&1
+git -C "$T/g1" worktree move "$T/g1/branches/feature/moved/core" "$T/g1-moved"
+expect_ok "rm follows a moved worktree" ent "$T/g1" rm -y feature/moved
+[[ ! -d "$T/g1-moved" && ! -d "$T/g1/branches/feature/moved" ]] && pass "both places gone" || fail "both places gone"
+# F: the git branch is gone; the record and a folder are left
+ent "$T/g1" branch feature/nobranch >/dev/null 2>&1
+git -C "$T/g1" worktree remove "$T/g1/branches/feature/nobranch/core"; git -C "$T/g1" branch -qD feature/nobranch
+mkdir -p "$T/g1/branches/feature/nobranch/core"
+expect_ok "rm clears a folder whose branch is gone" ent "$T/g1" rm -y feature/nobranch
+[[ ! -d "$T/g1/branches/feature/nobranch" ]] && pass "nobranch folder gone" || fail "nobranch folder gone"
+grep -q '"feature/nobranch"' "$T/g1/.bare/ent.json" && fail "nobranch record removed" || pass "nobranch record removed"
+# Nothing there at all, and names that are not branch names
+expect_fail "rm of nothing" "nothing named" ent "$T/g1" rm -y feature/never
+expect_fail "rm refuses a path-like name" "not a branch name" ent "$T/g1" rm -y ../..
+[[ -d "$T/g1/branches" ]] && pass "branches/ stays" || fail "branches/ stays"
 step "init --here and the folder your shell is standing in"
 # Windows cannot rename a folder a process is sitting in, so --here refuses
 # rather than failing halfway. Unix has no such rule, so there it just works.

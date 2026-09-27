@@ -60,6 +60,14 @@ Open a new terminal and you have the `ent` command (which `cd`s into the folders
 it creates or finds), tab completion, and the prompt helper. `git ent ...` works
 even without the `source` line. Re-run `./install.sh` after pulling updates.
 
+`ent branch merge`, `ent rm` and `ent sync` can delete the folder you are
+standing in, and Windows will not delete a folder that any process (your shell,
+or the `git.exe` that `git ent` starts) has as its current folder. So the `ent`
+command runs those three from the ent root and then brings you back, or into
+the parent after a merge. Plain `git ent branch merge` from inside the branch
+still merges, but on Windows it leaves an empty folder; `ent rm <branch>` clears
+it.
+
 To remove it: `~/.local/share/git-ent/uninstall.sh` (or `./uninstall.sh` from the
 repo). It removes what the installer added, including the `source` line in every
 file it recorded, and leaves your ents alone.
@@ -84,6 +92,7 @@ ent log                            # git log of every worktree, full screen
 ent branch merge                   # merge into the parent, then remove the branch
 ent sync                           # update main from origin, merge main into your work
 ent rm feature/x -r                # remove a branch and its twigs (asks first)
+ent rm feature/x                   # also clears a half-removed branch (leftover folder, missing branch)
 ent help [verb]                    # every verb and flag
 ```
 

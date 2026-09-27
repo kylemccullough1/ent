@@ -10,6 +10,7 @@ DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 YES=0
 FROM="" REMOTE="" WORKTREES="" FORCE=0 RECURSIVE=0 MERGE_ABORT=0 MERGE_CONTINUE=0 WIN=0 HERE=0
 ARGS=()
 REST_ARGS=()     # whatever followed `--`, passed on to git (see cmd_log)
+RM_LEFTOVER=()   # folders rm_one could not delete (something was standing in them)
 ENT=""
 
 # parse_globals: consume only global flags. Unknown flags are left in ARGS for
