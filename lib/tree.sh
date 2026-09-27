@@ -83,11 +83,23 @@ _tree_parse() {
   local f="$1"
   [[ -f "$f" ]] || return 0
   awk '
+    # unesc(): undo _json_str. \u005c goes last, so a name that really
+    # contains the text \u0022 comes back as written. A backslash in a gsub
+    # replacement means different things to gawk, mawk and BSD awk, so that
+    # one is put back by splitting and joining instead.
+    function unesc(s,   n, bits, k, out) {
+      gsub(/\\u0022/, "\"", s)
+      gsub(/\\u002c/, ",", s)
+      n = split(s, bits, /\\u005c/)
+      out = bits[1]
+      for (k = 2; k <= n; k++) out = out "\\" bits[k]
+      return out
+    }
     # val(): the string after the first colon, without its quotes.
     function val(s) {
       sub(/^[^:]*:[ \t]*"/, "", s)
       sub(/".*$/, "", s)
-      return s
+      return unesc(s)
     }
     BEGIN { in_nodes=0; node=""; canopy=""; type=""; parent=""; children=""; worktree="" }
     { sub(/\r$/, "") }
@@ -97,6 +109,7 @@ _tree_parse() {
       node=$0
       sub(/^[ \t]*"/, "", node)
       sub(/".*$/, "", node)
+      node=unesc(node)
       type=""; parent=""; children=""; worktree=""
       next
     }
@@ -116,7 +129,7 @@ _tree_parse() {
       for (j=1; j<=n; j++) {
         if (parts[j] == "") continue
         if (children != "") children=children " "
-        children=children parts[j]
+        children=children unesc(parts[j])
       }
       next
     }
@@ -217,22 +230,32 @@ _tree_collect_children() {
   printf '%s' "$out"
 }
 
+# _json_str <s>: REPLY = s with \ " and , written as the JSON escapes \u005c,
+# \u0022 and \u002c. git keeps control characters out of branch names, so these
+# three are all that can break the file (\ and ") or the children list (,).
+# _tree_parse decodes them. The backslash is matched through a quoted variable:
+# a bare \\ in a pattern inside double quotes matches nothing.
+_json_str() {
+  local s="$1" b='\' bs='\u005c' q='\u0022' c='\u002c'
+  s="${s//"$b"/$bs}"; s="${s//\"/$q}"; s="${s//,/$c}"
+  REPLY="$s"
+}
+
 # _tree_write: persist the in-memory arrays to .bare/ent.json atomically.
 # Under --dry-run nothing is written: every mutation still runs in memory, so
 # the rest of the command behaves the same, but the file is left alone.
 _tree_write() {
   (( ${DRY_RUN:-0} )) && return 0
-  local f="$(_tree_file)" tmp="$(_tree_file).tmp" i n child first
+  local f="$(_tree_file)" tmp="$(_tree_file).tmp" i child first
   {
     printf '{\n'
-    printf '  "canopy": "%s",\n' "$T_CANOPY"
+    _json_str "$T_CANOPY"; printf '  "canopy": "%s",\n' "$REPLY"
     printf '  "nodes": {\n'
     for (( i=0; i < ${#T_NAME[@]}; i++ )); do
-      n="${T_NAME[$i]}"
-      printf '    "%s": {\n' "$n"
-      printf '      "type": "%s",\n' "${T_TYPE[$i]}"
+      _json_str "${T_NAME[$i]}"; printf '    "%s": {\n' "$REPLY"
+      _json_str "${T_TYPE[$i]}"; printf '      "type": "%s",\n' "$REPLY"
       if [[ -n "${T_PARENT[$i]}" ]]; then
-        printf '      "parent": "%s",\n' "${T_PARENT[$i]}"
+        _json_str "${T_PARENT[$i]}"; printf '      "parent": "%s",\n' "$REPLY"
       else
         printf '      "parent": null,\n'
       fi
@@ -240,10 +263,10 @@ _tree_write() {
       first=1
       for child in ${T_CHILDREN[$i]}; do
         if (( first )); then first=0; else printf ', '; fi
-        printf '"%s"' "$child"
+        _json_str "$child"; printf '"%s"' "$REPLY"
       done
       printf '],\n'
-      printf '      "worktree": "%s"\n' "${T_WORKTREE[$i]}"
+      _json_str "${T_WORKTREE[$i]}"; printf '      "worktree": "%s"\n' "$REPLY"
       printf '    }'
       if (( i < ${#T_NAME[@]} - 1 )); then printf ','; fi
       printf '\n'

@@ -91,6 +91,30 @@ _TREE_LOCK_DEPTH=1; tree_unlock
 [[ -d "$lockdir" ]] && pass "unlock leaves a lock it does not own" || fail "unlock removed a lock it does not own"
 rm -rf "$lockdir"
 
+step "ent.json survives quotes, commas and backslashes"
+cp "$ENT/.bare/ent.json" "$T/ent.json.keep"
+odd='feature/a"b,c\d'
+T_CANOPY=main
+T_NAME=(main "$odd" "twigs/$odd/t")
+T_TYPE=(canopy branch twig)
+T_PARENT=("" main "$odd")
+T_CHILDREN=("$odd" "twigs/$odd/t" "")
+T_WORKTREE=(main/core 'odd "dir"/core' 'x\u0022y/core')
+_tree_write
+tree_load
+check "$odd" "${T_NAME[1]}" "a name with a quote, a comma and a backslash comes back"
+check "twigs/$odd/t" "${T_CHILDREN[1]}" "a child with those characters comes back"
+check "$odd" "${T_PARENT[2]}" "a parent with those characters comes back"
+check 'odd "dir"/core' "${T_WORKTREE[1]}" "a worktree path with quotes comes back"
+check 'x\u0022y/core' "${T_WORKTREE[2]}" "text that looks like an escape comes back as written"
+if command -v node >/dev/null 2>&1; then
+  check "$odd" "$(node -e 'process.stdout.write(Object.keys(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).nodes)[1])' "$ENT/.bare/ent.json" 2>&1)" "a real JSON parser reads the same name"
+else
+  skip "a real JSON parser reads the same name" "node not installed"
+fi
+mv -f "$T/ent.json.keep" "$ENT/.bare/ent.json"
+tree_load
+
 step "state and paths resolve from the node tree"
 cd "$ENT/main/core"
 libsrc paths
