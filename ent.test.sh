@@ -124,7 +124,10 @@ expect_fail "init names the bad source" "'./nope' is neither" ent "$T" init ./no
 
 step "init from a URL"
 mkdir "$T/src"; (cd "$T/src" && git init -q -b main . && echo hi >README.md && git add . && git commit -qm init \
-  && git checkout -q -b feature/remote-only && echo r >r.txt && git add . && git commit -qm remote && git checkout -q main)
+  && git checkout -q -b feature/remote-only && echo r >r.txt && git add . && git commit -qm remote \
+  && git checkout -q -b defect/remote-only && echo d >d.txt && git add . && git commit -qm defect \
+  && git checkout -q -b remote-only && echo n >n.txt && git add . && git commit -qm remote-only \
+  && git checkout -q main)
 SRC="$(Norm "$T/src")"; URL="file:///${SRC#/}"; [[ "$SRC" == /* ]] && URL="file://$SRC"
 ent "$T" init "$URL" g1 >/dev/null 2>&1
 [[ -d "$T/g1/.bare" && -d "$T/g1/main/core" ]] && pass "url layout" || fail "url layout"
@@ -190,6 +193,19 @@ expect_fail "branch --from remote ref" "not found locally" ent "$T/g1" branch fr
 
 step "branch --from and --remote are mutually exclusive"
 expect_fail "branch --from --remote conflict" "mutually exclusive" ent "$T/g1" branch conflict --from main --remote feature/remote-only
+
+step "branch --remote without a name uses the remote branch name"
+ent "$T/g1" branch --remote feature/remote-only >/dev/null
+[[ -d "$T/g1/branches/feature/remote-only/core" ]] && pass "default remote branch container created" || fail "default remote branch container"
+check "feature/remote-only" "$(git -C "$T/g1/branches/feature/remote-only/core" branch --show-current)" "default remote branch name"
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/feature/remote-only/core" rev-parse --abbrev-ref '@{u}')" "default remote branch upstream"
+expect_fail "branch --remote without name already exists" "already exists" ent "$T/g1" branch --remote feature/remote-only
+
+step "branch --from still requires a name"
+expect_fail "branch --from without name" "usage" ent "$T/g1" branch --from main
+
+step "branch without a name or flags fails"
+expect_fail "branch without name" "usage" ent "$T/g1" branch
 
 step "branch rejects unknown flags"
 expect_fail "branch unknown option" "unknown branch option" ent "$T/g1" branch foo --bogus
@@ -289,6 +305,27 @@ git add .entrc && git commit -qm "add entrc"
 expect_fail "pattern reject" "does not match" ent "$T/g1" branch defect/bad
 ent "$T/g1" branch feature/ok >/dev/null
 [[ -d "$T/g1/branches/feature/ok/core" ]] && pass "pattern allow" || fail "pattern allow"
+
+step "branch --remote default name respects branchPattern"
+expect_fail "remote default name pattern reject" "does not match" ent "$T/g1" branch --remote remote-only
+
+step "track sets upstream for an existing branch"
+ent "$T/g1" track feature/ok --remote feature/remote-only >/dev/null
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/feature/ok/core" rev-parse --abbrev-ref '@{u}')" "track sets upstream"
+
+step "track without branch name uses current branch"
+cd "$T/g1/branches/feature/ok/core"
+ent "$T/g1/branches/feature/ok/core" track --remote feature/remote-only >/dev/null
+check "origin/feature/remote-only" "$(git -C "$T/g1/branches/feature/ok/core" rev-parse --abbrev-ref '@{u}')" "track current branch upstream"
+
+step "track fails for missing remote branch"
+expect_fail "track missing remote" "remote branch 'nonexistent' not found" ent "$T/g1" track feature/ok --remote nonexistent
+
+step "track fails for missing local branch"
+expect_fail "track missing local" "branch 'nonexistent' not found" ent "$T/g1" track nonexistent --remote feature/remote-only
+
+step "track rejects extra positional arguments"
+expect_fail "track extra arg" "usage" ent "$T/g1" track feature/ok extra --remote feature/remote-only
 
 step "path resolution (library) from inside an ent"
 cd "$T/g1/main/core"

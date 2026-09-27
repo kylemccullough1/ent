@@ -1,11 +1,12 @@
 # ent branch: create a top-level branch under <ent>/branches/.
 
 help_branch() { cat <<'EOF'
-branch <name> [--from <base> | --remote <remote-branch>]
+branch <name> [--from <base>] | branch [<name>] --remote <remote-branch>
   create a branch at branches/<name>/core
   Cut from the branch or twig you are standing in (main from the ent root),
   from --from <base> (another local branch), or from --remote <remote-branch>
   on origin. --remote sets the upstream to origin/<remote-branch>.
+  With --remote, <name> is optional and defaults to <remote-branch>.
   The name is used exactly as given and must match branchPattern if .entrc sets one.
 EOF
 }
@@ -41,8 +42,20 @@ cmd_branch() {
   ensure_ent
   parse_branch_args
   local branch pat base core_dir track_arg
-  branch="$(arg 1)"
-  [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base> | --remote <remote-branch>]"
+  [[ -z "$FROM" || -z "$REMOTE" ]] || die "--from and --remote are mutually exclusive"
+
+  if [[ -n "$REMOTE" ]]; then
+    branch="$(arg 1)"
+    [[ -n "$branch" ]] || branch="$REMOTE"
+  elif [[ -n "$FROM" ]]; then
+    branch="$(arg 1)"
+    [[ -n "$branch" ]] || usage_die "branch <name> --from <base>"
+  else
+    branch="$(arg 1)"
+    [[ -n "$branch" ]] || usage_die "branch <name> [--from <base>] | branch [<name>] --remote <remote-branch>"
+  fi
+  [[ -z "$(arg 2)" ]] || usage_die "branch <name> [--from <base>] | branch [<name>] --remote <remote-branch>"
+
   # An existing branch with no worktree is adopted rather than refused. This
   # comes before the twigs/ guard: that guard stops you CREATING a twig branch
   # by hand, but an existing one deserves its folder back like any other.
@@ -52,7 +65,6 @@ cmd_branch() {
     return
   fi
   [[ "$branch" != twigs/* ]] || die "'twigs/' is reserved for twig branches; pick another name"
-  [[ -z "$FROM" || -z "$REMOTE" ]] || die "--from and --remote are mutually exclusive"
   check_new_name "$branch"
   pat="$(branch_pattern)"
   if [[ -n "$pat" && ! "$branch" =~ $pat ]]; then die "branch '$branch' does not match branchPattern: $pat"; fi

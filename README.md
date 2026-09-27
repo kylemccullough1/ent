@@ -73,7 +73,9 @@ ent init ../old-clone new-ent      # from an existing clone (left untouched)
 ent init --here                    # turn the repo you are in into an ent, in place
 
 ent branch feature/x               # branches/feature/x/core, cut from where you stand
-ent branch feature/x --remote feature/x  # from origin/feature/x, tracking it
+ent branch --remote feature/x      # same name as the remote branch
+ent branch feature/x --remote feature/x  # explicit local name, still tracking origin/feature/x
+ent track feature/x --remote feature/x   # link an existing local branch to a remote branch
 ent twig db                        # inside feature/x: branch twigs/feature/x/db
 ent up / ent down db / ent go feature/x
 ent list                           # the whole tree
@@ -162,7 +164,10 @@ and an open handle blocks it.
   them and what `ent up` and `ent down` follow. `ent branch <name>` cuts it from
   the branch or twig you are standing in (main when you are at the ent root),
   from `--from <base>` (another local branch), or from `--remote <remote-branch>`
-  on origin, which sets the upstream. The name is used exactly as typed.
+  on origin, which sets the upstream. With `--remote` the local name is optional
+  and defaults to the remote branch name; otherwise the name is used exactly as
+  typed. `ent track [<branch>] --remote <remote-branch>` links an existing local
+  branch to a remote branch.
 - A **twig** belongs to the branch it was made from. A twig `db` of branch
   `feature/x` is the branch `twigs/feature/x/db`, and its parent is recorded in
   `.bare/config` as `branch.<twig>.entParent`. That record is local, never pushed.
