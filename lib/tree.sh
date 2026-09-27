@@ -50,51 +50,53 @@ tree_unlock() {
 # _tree_parse <file>: print a flat representation the shell can read:
 #   CANOPY <canopy>
 #   NODE <name> <type> <parent> <children> <worktree>
+#
+# Plain POSIX awk only: macOS ships BSD awk and Ubuntu ships mawk, and neither
+# has gawk's match(s, re, array). Values are cut out with sub() instead, and
+# [ \t] stands in for [[:space:]], which old mawk builds lack.
 _tree_parse() {
   local f="$1"
   [[ -f "$f" ]] || return 0
   awk '
+    # val(): the string after the first colon, without its quotes.
+    function val(s) {
+      sub(/^[^:]*:[ \t]*"/, "", s)
+      sub(/".*$/, "", s)
+      return s
+    }
     BEGIN { in_nodes=0; node=""; canopy=""; type=""; parent=""; children=""; worktree="" }
     { sub(/\r$/, "") }
-    /^[[:space:]]*"canopy"[[:space:]]*:[[:space:]]*"/ {
-      match($0, /"canopy"[[:space:]]*:[[:space:]]*"([^"]+)"/, m)
-      canopy=m[1]
-      next
-    }
-    /^[[:space:]]*"nodes"[[:space:]]*:[[:space:]]*\{/ { in_nodes=1; next }
-    in_nodes && /^[[:space:]]*"[^"]+"[[:space:]]*:[[:space:]]*\{/ {
-      match($0, /"([^"]+)"[[:space:]]*:[[:space:]]*\{/, m)
-      node=m[1]
+    /^[ \t]*"canopy"[ \t]*:[ \t]*"/ { canopy=val($0); next }
+    /^[ \t]*"nodes"[ \t]*:[ \t]*[{]/ { in_nodes=1; next }
+    in_nodes && /^[ \t]*"[^"]+"[ \t]*:[ \t]*[{]/ {
+      node=$0
+      sub(/^[ \t]*"/, "", node)
+      sub(/".*$/, "", node)
       type=""; parent=""; children=""; worktree=""
       next
     }
-    node != "" && /^[[:space:]]*"type"[[:space:]]*:/ {
-      match($0, /"type"[[:space:]]*:[[:space:]]*"([^"]+)"/, m); type=m[1]
+    node != "" && /^[ \t]*"type"[ \t]*:/ { type=val($0); next }
+    node != "" && /^[ \t]*"parent"[ \t]*:/ {
+      if ($0 ~ /:[ \t]*null/) parent=""
+      else parent=val($0)
       next
     }
-    node != "" && /^[[:space:]]*"parent"[[:space:]]*:/ {
-      if ($0 ~ /null/) parent=""
-      else { match($0, /"parent"[[:space:]]*:[[:space:]]*"([^"]*)"/, m); parent=m[1] }
-      next
-    }
-    node != "" && /^[[:space:]]*"children"[[:space:]]*:/ {
-      match($0, /\[([^\]]*)\]/, m)
-      raw=m[1]
-      n=split(raw, parts, /,[[:space:]]*/)
+    node != "" && /^[ \t]*"children"[ \t]*:/ {
+      raw=$0
+      sub(/^[^[]*[[]/, "", raw)
+      sub(/[]].*$/, "", raw)
+      gsub(/[" \t]/, "", raw)
+      n=split(raw, parts, ",")
       children=""
       for (j=1; j<=n; j++) {
-        gsub(/"/, "", parts[j])
         if (parts[j] == "") continue
         if (children != "") children=children " "
         children=children parts[j]
       }
       next
     }
-    node != "" && /^[[:space:]]*"worktree"[[:space:]]*:/ {
-      match($0, /"worktree"[[:space:]]*:[[:space:]]*"([^"]+)"/, m); worktree=m[1]
-      next
-    }
-    node != "" && /^[[:space:]]*\}[[:space:]]*,?$/ {
+    node != "" && /^[ \t]*"worktree"[ \t]*:/ { worktree=val($0); next }
+    node != "" && /^[ \t]*[}][ \t]*,?$/ {
       printf "NODE\036%s\036%s\036%s\036%s\036%s\n", node, type, parent, children, worktree
       node=""
       next
@@ -125,10 +127,12 @@ tree_load() {
     return 0
   fi
 
+  local seen_canopy=0
   while IFS= read -r line; do
     case "$line" in
       CANOPY*)
         T_CANOPY="${line#CANOPY$'\036'}"
+        seen_canopy=1
         ;;
       NODE*)
         IFS=$'\036' read -r _ node tmp_type tmp_parent tmp_children tmp_worktree <<<"$line"
@@ -140,6 +144,16 @@ tree_load() {
         ;;
     esac
   done < <(_tree_parse "$f")
+
+  # Every file _tree_write produces has a canopy line. No canopy means the file
+  # is damaged, or awk could not run the parser. An empty tree would quietly
+  # misdirect every command, so set the file aside and rebuild it from git.
+  if (( ! seen_canopy )); then
+    warn "could not read $f; rebuilding it from git (the old file is kept as ent.json.bad)"
+    mv -f "$f" "$f.bad" 2>/dev/null || true
+    T_CANOPY="main"; T_NAME=(); T_TYPE=(); T_PARENT=(); T_CHILDREN=(); T_WORKTREE=()
+    tree_bootstrap
+  fi
 }
 
 # _tree_collect_children <parent>: print space-separated child names.
@@ -230,7 +244,8 @@ tree_bootstrap() {
     branch="${branch#refs/heads/}"
     _tree_index_of "$branch" || continue
     T_WORKTREE[$T_INDEX]="$(_rel_path "$ENT" "$path")"
-  done < <(git -C "$ENT" worktree list --porcelain | awk '/^worktree /{p=$2} /^branch /{print $2 " " p}')
+  # substr, not $2: a worktree path may contain spaces.
+  done < <(git -C "$ENT" worktree list --porcelain | awk '/^worktree /{p=substr($0, 10)} /^branch /{print $2 " " p}')
 
   # Ensure the canopy node exists even if no branches were found.
   if ! _tree_index_of "$T_CANOPY"; then

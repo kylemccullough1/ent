@@ -24,6 +24,10 @@ expect_fail() { local msg="$1" want="$2"; shift 2
   elif grep -qF -- "$want" "$T/err"; then pass "$msg"
   else fail "$msg (stderr lacks '$want'): $(tr '\n' ' ' <"$T/err")"; fi; }
 Norm() { (cd "$1" && { cygpath -ml "$PWD" 2>/dev/null || pwd -P; }); }
+# libsrc <lib>: source an ent library for unit tests. The libraries turn on
+# set -e; this suite must not stop at the first expected failure, so turn it
+# back off.
+libsrc() { source "$(dirname "$G")/lib/$1.sh" >/dev/null 2>&1; set +e; }
 ent() { local d="$1"; shift; (cd "$d" && "$BASH" "$G" "$@"); }
 
 # ---------- platform ----------
@@ -43,8 +47,8 @@ windows_only() { if (( ON_WINDOWS )); then return 0; fi; skip "$1" "windows only
 mklink_j() { MSYS_NO_PATHCONV=1 cmd /c mklink /J "$(cygpath -w "$1")" "$(cygpath -w "$2")" >/dev/null 2>&1; }
 
 step "node tree loads from .bare/ent.json"
-source "$(dirname "$G")/lib/core.sh" >/dev/null 2>&1
-source "$(dirname "$G")/lib/tree.sh" >/dev/null 2>&1
+libsrc core
+libsrc tree
 ent "$T" init tree-test >/dev/null 2>&1
 ENT="$(Norm "$T/tree-test")"
 cat >"$ENT/.bare/ent.json" <<'JSON'
@@ -74,7 +78,7 @@ tree_worktree_of "feature/x"; [[ "$REPLY" == "branches/feature/x/core" ]] && pas
 
 step "state and paths resolve from the node tree"
 cd "$ENT/main/core"
-source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
+libsrc paths
 load_state
 [[ "$(ent_canopy)" == "main" ]] && pass "ent_canopy" || fail "ent_canopy"
 [[ "$(ent_core feature/x)" == "$ENT/branches/feature/x/core" ]] && pass "ent_core from tree" || fail "ent_core from tree"
@@ -86,8 +90,27 @@ for i in 1 2 3; do
 done
 wait
 tree_load
-n=0; for x in ${T_NAME[@]+"${T_NAME[@]}"}; do n=$((n+1)); done
-(( n >= 3 )) && pass "concurrent writes survived" || fail "concurrent writes corrupted node list"
+# The tree already holds main and feature/x, so counting nodes would pass even
+# with writes lost. Each concurrent node must be there by name.
+lost=""; for i in 1 2 3; do tree_node_exists "concurrent$i" || lost+=" concurrent$i"; done
+[[ -z "$lost" ]] && pass "concurrent writes survived" || fail "concurrent writes lost:$lost"
+
+step "ent.json parses with POSIX awk (BSD awk on macOS, mawk on Ubuntu)"
+# gawk --posix turns off gawk's extensions, such as match() with an array.
+# Where awk is not gawk, this platform's awk is the check.
+if awk --version 2>/dev/null | grep -q "GNU Awk"; then awk() { command awk --posix "$@"; }; fi
+tree_load
+tree_parent_of "concurrent1"; check "main" "$REPLY" "posix awk reads a parent"
+tree_worktree_of "concurrent2"; check "branches/concurrent2/core" "$REPLY" "posix awk reads a worktree"
+tree_children_of "main"; [[ " ${REPLY_LIST[*]} " == *" concurrent3 "* ]] && pass "posix awk reads children" || fail "posix awk children: ${REPLY_LIST[*]}"
+unset -f awk 2>/dev/null
+
+step "an unreadable ent.json is rebuilt from git, loudly"
+printf 'not json\n' >"$ENT/.bare/ent.json"
+tree_load 2>"$T/err"
+grep -q "rebuilding it from git" "$T/err" && pass "warns about the damaged file" || fail "no warning for a damaged ent.json"
+[[ -f "$ENT/.bare/ent.json.bad" ]] && pass "damaged file kept as ent.json.bad" || fail "damaged file not kept"
+check "main" "$(tree_canopy)" "rebuilt tree has the canopy"
 
 step "init a brand-new ent by name"
 ent "$T" init fresh >/dev/null 2>&1
@@ -229,7 +252,7 @@ ent "$T/g1" branch feature/ok >/dev/null
 
 step "path resolution (library) from inside an ent"
 cd "$T/g1/main/core"
-source "$(dirname "$G")/lib/paths.sh" >/dev/null 2>&1
+libsrc paths
 ENT="$(Norm "$T/g1")"
 check "$(Norm "$T/g1/main/core")" "$(ent_core main)" "ent_core main"
 check "$(Norm "$T/g1/branches/feature/a/core")" "$(ent_core feature/a)" "ent_core feature/a"

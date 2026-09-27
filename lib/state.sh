@@ -121,7 +121,8 @@ wt_path_of() {
 # children_of <branch>: REPLY_LIST = its immediate children, in file order.
 children_of() {
   state_ready
-  tree_children_of "$1"; REPLY_LIST=("${REPLY_LIST[@]}")
+  tree_children_of "$1" || true
+  REPLY_LIST=(${REPLY_LIST[@]+"${REPLY_LIST[@]}"})
 }
 
 # top_branches: REPLY_LIST = branches with no parent, excluding the default branch.
