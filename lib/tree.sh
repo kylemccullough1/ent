@@ -27,24 +27,49 @@ _rel_path() {
   esac
 }
 
-# tree_lock / tree_unlock: advisory lock using mkdir (atomic everywhere).
+_TREE_LOCK_DEPTH=0   # >0 while this process holds the lock; nested calls count
+
+# tree_lock / tree_unlock: advisory lock on ent.json. mkdir is atomic
+# everywhere, so whoever creates the folder holds the lock. The holder writes
+# its pid inside, so a waiter can tell a crashed holder from a slow one and
+# never breaks a live one. tree_add_node -> tree_load -> tree_bootstrap locks
+# twice; the second call only counts.
 tree_lock() {
-  local lock="$(_tree_lock)" waited=0
+  if (( _TREE_LOCK_DEPTH > 0 )); then _TREE_LOCK_DEPTH=$((_TREE_LOCK_DEPTH + 1)); return 0; fi
+  local lock waited=0 pid
+  lock="$(_tree_lock)"
   while ! mkdir "$lock" 2>/dev/null; do
-    if (( waited >= 100 )); then
-      # The lock is older than 10 seconds; something died. Break it.
-      warn "breaking stale lock $lock"
-      rmdir "$lock" 2>/dev/null || true
-      mkdir "$lock" 2>/dev/null && break
-      die "cannot acquire lock $lock"
+    pid="$(cat "$lock/pid" 2>/dev/null || true)"
+    if _tree_lock_stale "$lock" "$pid"; then
+      warn "breaking stale lock $lock${pid:+ (pid $pid is gone)}"
+      rm -rf "$lock"
+      continue
     fi
+    (( waited < 300 )) || die "timed out waiting for $lock${pid:+ (held by pid $pid)}; if no ent command is running, delete that folder"
     sleep 0.1 2>/dev/null || sleep 1
     waited=$((waited + 1))
   done
+  printf '%s\n' "$$" >"$lock/pid"
+  _TREE_LOCK_DEPTH=1
 }
 
+# _tree_lock_stale <lock> <pid>: true when the holder is gone. With a pid, ask
+# the OS. Without one (the holder died between mkdir and writing it, or an
+# older git-ent made the lock), call it stale once the folder is a minute old.
+_tree_lock_stale() {
+  if [[ -n "$2" ]]; then ! kill -0 "$2" 2>/dev/null; return; fi
+  [[ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]]
+}
+
+# Only the holder removes the lock: if a waiter broke it as stale, the folder
+# there now belongs to someone else.
 tree_unlock() {
-  rmdir "$(_tree_lock)" 2>/dev/null || true
+  (( _TREE_LOCK_DEPTH > 0 )) || return 0
+  _TREE_LOCK_DEPTH=$((_TREE_LOCK_DEPTH - 1))
+  (( _TREE_LOCK_DEPTH == 0 )) || return 0
+  local lock; lock="$(_tree_lock)"
+  [[ "$(cat "$lock/pid" 2>/dev/null)" == "$$" ]] || return 0
+  rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true
 }
 
 # _tree_parse <file>: print a flat representation the shell can read:

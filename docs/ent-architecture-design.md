@@ -381,7 +381,7 @@ The `feature-foo → feature/foo` shorthand is unnecessary. `ent go` and `ent do
 
 ### 13.2 Concurrent writes
 
-A simple advisory lock file will be used: `.bare/ent.json.lock`. Any process that writes the file acquires the lock with `mkdir` (atomic on all supported platforms) and releases it by removing the directory. If a lock is stale, the next writer breaks it after a short timeout.
+A simple advisory lock file will be used: `.bare/ent.json.lock`. Any process that writes the file acquires the lock with `mkdir` (atomic on all supported platforms), writes its pid into `.bare/ent.json.lock/pid`, and releases it by removing the directory. Only the holder whose pid is recorded removes it. A waiter breaks the lock only when the recorded pid is no longer running (or, with no pid file, when the folder is over a minute old); a live holder is waited on for up to 30 seconds, after which the waiter gives up with an error. Nested locking in one process (`tree_add_node` → `tree_load` → `tree_bootstrap`) is counted, not re-acquired.
 
 ### 13.3 Guard against non-ent worktrees
 

@@ -76,6 +76,21 @@ tree_parent_of "feature/x"; [[ "$REPLY" == "main" ]] && pass "tree_parent_of" ||
 tree_children_of "main"; [[ "${REPLY_LIST[*]}" == "feature/x" ]] && pass "tree_children_of" || fail "tree_children_of"
 tree_worktree_of "feature/x"; [[ "$REPLY" == "branches/feature/x/core" ]] && pass "tree_worktree_of" || fail "tree_worktree_of"
 
+step "the ent.json lock"
+lockdir="$ENT/.bare/ent.json.lock"
+bash -c 'exit 0' & deadpid=$!; wait "$deadpid"
+mkdir "$lockdir"; echo "$deadpid" >"$lockdir/pid"
+tree_lock 2>/dev/null
+check "$$" "$(cat "$lockdir/pid" 2>/dev/null)" "a lock left by a dead process is broken and taken"
+tree_lock; tree_unlock
+[[ -d "$lockdir" ]] && pass "a nested unlock keeps the lock" || fail "a nested unlock released the lock"
+tree_unlock
+[[ ! -d "$lockdir" ]] && pass "the outer unlock releases it" || fail "the outer unlock left the lock"
+mkdir "$lockdir"; echo "$deadpid" >"$lockdir/pid"
+_TREE_LOCK_DEPTH=1; tree_unlock
+[[ -d "$lockdir" ]] && pass "unlock leaves a lock it does not own" || fail "unlock removed a lock it does not own"
+rm -rf "$lockdir"
+
 step "state and paths resolve from the node tree"
 cd "$ENT/main/core"
 libsrc paths
