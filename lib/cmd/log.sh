@@ -19,6 +19,7 @@ render_log() {
 }
 
 cmd_log() {
+  take_flags log
   # Everything after `--` belongs to git log, e.g. `ent log -- --stat -n 20`.
   LOG_ARGS=(${REST_ARGS[@]+"${REST_ARGS[@]}"})
   view_run "ent log" render_log

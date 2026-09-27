@@ -7,24 +7,10 @@ track [<branch>] --remote <remote-branch>
 EOF
 }
 
-parse_track_args() {
-  local i=0 new_args=()
-  REMOTE=""
-  while (( i < ${#ARGS[@]} )); do
-    local a="${ARGS[$i]}"
-    case "$a" in
-      --remote) i=$((i+1)); REMOTE="${ARGS[$i]:-}"; [[ -n "$REMOTE" ]] || die "--remote requires a value" ;;
-      -*)       die "unknown track option: $a" ;;
-      *)        new_args+=("$a") ;;
-    esac
-    i=$((i+1))
-  done
-  ARGS=("${new_args[@]}")
-}
-
 cmd_track() {
   ensure_ent
-  parse_track_args
+  REMOTE=""
+  take_flags track --remote=REMOTE
   local branch
   [[ -n "$REMOTE" ]] || usage_die "track [<branch>] --remote <remote-branch>"
   branch="$(arg 1)"

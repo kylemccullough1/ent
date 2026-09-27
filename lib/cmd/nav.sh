@@ -11,6 +11,7 @@ EOF
 
 cmd_up() {
   ensure_ent
+  take_flags up
   # Anywhere inside the ent that is not a worktree -- the root itself, or a
   # bare container like branches/ -- has main/core as the sensible landing
   # spot, so `up` is never a dead end.
@@ -21,6 +22,7 @@ cmd_up() {
 
 cmd_down() {
   ensure_ent
+  take_flags down
   local b name choices=() child match=""
   name="$(arg 1)"
   b="$(ent_branch_of_cwd 2>/dev/null || true)"
@@ -63,6 +65,7 @@ go_emit() {
 
 cmd_go() {
   ensure_ent
+  take_flags go
   local name b
   name="$(arg 1)"
   [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "go <branch>"
@@ -99,24 +102,10 @@ cmd_where() {
   return 0
 }
 
-parse_path_args() {
-  local i=0 new_args=()
-  WIN=0
-  while (( i < ${#ARGS[@]} )); do
-    local a="${ARGS[$i]}"
-    case "$a" in
-      --win) WIN=1 ;;
-      -*)    die "unknown path option: $a" ;;
-      *)     new_args+=("$a") ;;
-    esac
-    i=$((i+1))
-  done
-  ARGS=("${new_args[@]}")
-}
-
 cmd_path() {
   ensure_ent
-  parse_path_args
+  WIN=0
+  take_flags path --win:WIN
   local branch p
   branch="$(arg 1)"
   [[ -n "$branch" && -z "$(arg 2)" ]] || usage_die "path <branch> [--win]"

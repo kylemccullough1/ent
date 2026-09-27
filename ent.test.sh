@@ -232,6 +232,17 @@ expect_fail "branch without name" "usage" ent "$T/g1" branch
 
 step "branch rejects unknown flags"
 expect_fail "branch unknown option" "unknown branch option" ent "$T/g1" branch foo --bogus
+expect_fail "branch --from with no value" "--from requires a value" ent "$T/g1" branch foo --from
+
+step "verbs with no flags of their own still refuse unknown ones"
+expect_fail "list unknown option" "unknown list option" ent "$T/g1" list --bogus
+expect_fail "go unknown option" "unknown go option" ent "$T/g1" go main --bogus
+expect_fail "up unknown option" "unknown up option" ent "$T/g1/main/core" up --x
+expect_fail "down unknown option" "unknown down option" ent "$T/g1" down --x
+expect_fail "status unknown option" "unknown status option" ent "$T/g1" status --x
+expect_fail "log unknown option" "unknown log option" ent "$T/g1" log --x
+expect_fail "sync unknown option" "unknown sync option" ent "$T/g1" sync --x
+expect_ok "log flags after -- still go to git" ent "$T/g1" log -- --stat -n 1
 
 step "git commands are echoed only under --dry-run"
 ent "$T/g1" branch echo-quiet >/dev/null 2>"$T/err"
@@ -872,6 +883,11 @@ ent "$T/wtmove" init --here -y --worktrees move >/dev/null 2>&1
 [[ ! -d "$T/wtmove-side" ]] && pass "old worktree path is gone" || fail "old worktree path is gone"
 check "" "$(git -C "$T/wtmove-ent/branches/feature/local-only/core" status --porcelain)" "moved worktree is clean"
 check "l" "$(cat "$T/wtmove-ent/branches/feature/local-only/core/l.txt" 2>/dev/null)" "moved worktree has its files"
+
+step "init --worktrees checks its value"
+expect_fail "init --worktrees with no value" "--worktrees requires a value" ent "$T" init --here --worktrees
+expect_fail "init --worktrees with a bad value" "--worktrees takes move or drop" ent "$T" init --here --worktrees keep
+expect_fail "init unknown option" "unknown init option" ent "$T" init --bogus
 
 step "init --here prompts when worktrees exist and no flag is given"
 mkrepo "$T/wtcancel"

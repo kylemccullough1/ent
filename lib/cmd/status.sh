@@ -19,4 +19,4 @@ render_status() {
   fi
 }
 
-cmd_status() { view_run "ent status" render_status; }
+cmd_status() { take_flags status; view_run "ent status" render_status; }

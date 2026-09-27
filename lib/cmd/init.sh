@@ -17,27 +17,10 @@ init --here [path]                     turn an existing repo into an ent, in pla
 EOF
 }
 
-parse_init_args() {
-  local i=0 new_args=()
-  HERE=0; WORKTREES=""
-  while (( i < ${#ARGS[@]} )); do
-    local a="${ARGS[$i]}"
-    case "$a" in
-      --here)  HERE=1 ;;
-      --worktrees)
-        i=$((i+1)); WORKTREES="${ARGS[$i]:-}"
-        case "$WORKTREES" in move|drop) ;; *) die "--worktrees takes move or drop" ;; esac
-        ;;
-      -*)      die "unknown init option: $a" ;;
-      *)       new_args+=("$a") ;;
-    esac
-    i=$((i+1))
-  done
-  ARGS=("${new_args[@]}")
-}
-
 cmd_init() {
-  parse_init_args
+  HERE=0 WORKTREES=""
+  take_flags init --here:HERE --worktrees=WORKTREES
+  case "$WORKTREES" in ""|move|drop) ;; *) die "--worktrees takes move or drop" ;; esac
   if (( HERE )); then cmd_init_here; return $?; fi
   local src dir kind=name
   src="$(arg 1)" dir="$(arg 2)"

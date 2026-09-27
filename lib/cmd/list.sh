@@ -11,6 +11,7 @@ EOF
 
 cmd_list() {
   ensure_ent
+  take_flags list
   local b tops
   list_node "$S_MAIN" "" "$ENT/main"
   top_branches

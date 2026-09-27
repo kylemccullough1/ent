@@ -15,6 +15,7 @@ EOF
 
 cmd_sync() {
   ensure_ent; cd "$ENT"
+  take_flags sync
   local only; only="$(arg 1)"
   [[ -z "$(arg 2)" ]] || usage_die "sync [branch] [-y]"
   if [[ -n "$only" ]]; then
