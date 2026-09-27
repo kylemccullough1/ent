@@ -1,8 +1,27 @@
 # ent navigation: print a folder for the `ent` shell wrapper to cd into.
 
-help_up()   { echo "up                                     go to the parent's core/ (or the ent root from a branch)"; }
-help_down() { echo "down [name]                            go into a twig (the only one, or by name)"; }
-help_go()   { echo "go <branch>                            go to any branch or twig (feature/x or feature-x)"; }
+help_up() { cat <<'EOF'
+up [--tab|--new-window]                go to the parent's core/ (or the ent root from a branch)
+  --tab / --new-window open it in Windows Terminal instead of moving this shell.
+EOF
+}
+help_down() { cat <<'EOF'
+down [name] [--tab|--new-window]       go into a twig (the only one, or by name)
+  --tab / --new-window open it in Windows Terminal instead of moving this shell.
+EOF
+}
+help_go() { cat <<'EOF'
+go <branch> [--tab|--new-window]       go to any branch or twig (feature/x or feature-x)
+  --tab / --new-window open it in Windows Terminal instead of moving this shell.
+EOF
+}
+help_open() { cat <<'EOF'
+open [<branch>] [--new-window]         open a branch in a new Windows Terminal tab
+  With no name, opens the branch you are standing in (main at the ent root).
+  Names work as they do for `ent go`. --new-window opens a window instead.
+  The tab is titled with the branch name; your current shell stays where it is.
+EOF
+}
 help_path() { cat <<'EOF'
 path <branch> [--win]                  print a branch's core/ path
   --win  print it as a Windows path (C:\...) under Git Bash
@@ -15,8 +34,11 @@ cmd_up() {
   # bare container like branches/ -- has main/core as the sensible landing
   # spot, so `up` is never a dead end.
   local b
-  if b="$(ent_branch_of_cwd)"; then emit_path "$(ent_parent_core "$b")"
-  else emit_path "$(ent_core "$S_MAIN")"; fi
+  if b="$(ent_branch_of_cwd)"; then
+    parent_of "$b"
+    if [[ -n "$REPLY" ]]; then emit_path "$(ent_core "$REPLY")" "" "$REPLY"
+    else emit_path "$ENT" "" ent; fi
+  else emit_path "$(ent_core "$S_MAIN")" "" "$S_MAIN"; fi
 }
 
 cmd_down() {
@@ -40,7 +62,7 @@ cmd_down() {
       echo "Multiple choices:" >&2; printf '  %s\n' "${choices[@]}" >&2
       die "run 'ent down <name>'"
     fi
-    emit_path "$(ent_core "${choices[0]}")"; return
+    emit_path "$(ent_core "${choices[0]}")" "" "${choices[0]}"; return
   fi
   for child in "${choices[@]}"; do
     if [[ "$child" == "$name" || "$(ent_twigname "$child")" == "$name" || "$(ent_slug "$child")" == "$name" ]]; then
@@ -49,7 +71,7 @@ cmd_down() {
     fi
   done
   [[ -n "$match" ]] || die "no child matches '$name'"
-  emit_path "$(ent_core "$match")"
+  emit_path "$(ent_core "$match")" "" "$match"
 }
 
 # go_emit <branch>: hand back the branch's folder, or explain why there is none.
@@ -60,29 +82,48 @@ go_emit() {
   if ! wt_path_of "$1"; then
     die "branch '$1' has no worktree. Give it one:  ent branch $1"
   fi
-  emit_path "$(ent_core "$1")"
+  emit_path "$(ent_core "$1")" "" "$1"
 }
 
-cmd_go() {
-  ensure_ent
-  local name b
-  name="$(arg 1)"
-  [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "go <branch>"
+# go_resolve <name>: REPLY = the branch <name> means, the way `go` and `open` read it:
+# the exact branch name, then the slug (feature-x for feature/x), then a twig's short
+# name. Dies when nothing matches, or when two twigs share the short name.
+go_resolve() {
+  local name="$1" b match=""
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
-    [[ "$b" == "$name" ]] && { go_emit "$b"; return; }
+    [[ "$b" == "$name" ]] && { REPLY="$b"; return 0; }
   done
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
-    [[ "$(ent_slug "$b")" == "$name" ]] && { go_emit "$b"; return; }
+    [[ "$(ent_slug "$b")" == "$name" ]] && { REPLY="$b"; return 0; }
   done
   # A twig's short name, e.g. `go mainc` for twigs/mainb/mainc.
-  local match=""
   for b in ${S_LOCAL[@]+"${S_LOCAL[@]}"}; do
     [[ "$b" == twigs/* && "${b##*/}" == "$name" ]] || continue
     [[ -z "$match" ]] || { echo "Multiple twigs named '$name': $match $b" >&2; die "use the full branch name"; }
     match="$b"
   done
-  [[ -n "$match" ]] && { go_emit "$match"; return; }
-  die "no branch matches '$name'"
+  [[ -n "$match" ]] || die "no branch matches '$name'"
+  REPLY="$match"
+}
+
+cmd_go() {
+  ensure_ent
+  local name
+  name="$(arg 1)"
+  [[ -n "$name" && -z "$(arg 2)" ]] || usage_die "go <branch>"
+  go_resolve "$name"
+  go_emit "$REPLY"
+}
+
+# cmd_open: `go` that always opens a new tab (or window, with --new-window). With no
+# name it opens where you stand: the branch that owns this folder, else main.
+cmd_open() {
+  ensure_ent
+  local name b
+  name="$(arg 1)"
+  [[ -z "$(arg 2)" ]] || usage_die "open [<branch>] [--new-window]"
+  if [[ -n "$name" ]]; then go_resolve "$name"; go_emit "$REPLY"; return; fi
+  if b="$(ent_branch_of_cwd 2>/dev/null)"; then go_emit "$b"; else go_emit "$S_MAIN"; fi
 }
 
 # cmd_where (internal, used by the prompt helpers): the branch that owns the current

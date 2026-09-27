@@ -8,6 +8,7 @@ branch <name> [--from <base>] | branch [<name>] --remote <remote-branch>
   on origin. --remote sets the upstream to origin/<remote-branch>.
   With --remote, <name> is optional and defaults to <remote-branch>.
   The name is used exactly as given and must match branchPattern if .entrc sets one.
+  --tab / --new-window open the new branch in Windows Terminal instead of moving this shell.
 EOF
 }
 
@@ -35,7 +36,7 @@ branch_adopt() {
   # No -b: the branch is already there, we are only checking it out.
   run git -C "$ENT" worktree add "$core_dir" "$branch"
   worktree_bare_guard "$core_dir"
-  emit_path "$core_dir" "Gave existing branch $branch a folder at $core_dir"
+  emit_path "$core_dir" "Gave existing branch $branch a folder at $core_dir" "$branch"
 }
 
 cmd_branch() {
@@ -80,5 +81,5 @@ cmd_branch() {
   run mkdir -p "$ENT/branches/$branch/twigs"
   run git -C "$ENT" worktree add "$track_arg" -b "$branch" "$core_dir" "$base"
   worktree_bare_guard "$core_dir"
-  emit_path "$core_dir" "Created branch $branch at $core_dir"
+  emit_path "$core_dir" "Created branch $branch at $core_dir" "$branch"
 }

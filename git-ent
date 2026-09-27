@@ -24,7 +24,7 @@ done
 ENT_LIB="$(cd "$(dirname "$_self")" && pwd)/lib"
 unset _self _dir
 [[ -d "$ENT_LIB" ]] || ENT_LIB="${XDG_DATA_HOME:-$HOME/.local/share}/git-ent/lib"
-for _f in core config state paths view; do source "$ENT_LIB/$_f.sh"; done
+for _f in core config state paths view wt; do source "$ENT_LIB/$_f.sh"; done
 for _f in "$ENT_LIB"/cmd/*.sh; do source "$_f"; done
 unset _f
 
@@ -35,7 +35,10 @@ ensure_ent() {
 }
 
 # Verbs in the order `ent help` lists them.
-VERBS="init branch merge twig track list status log go up down path sync rm destroy"
+VERBS="init branch merge twig track list status log go up down open path sync rm destroy"
+
+# Verbs that end at a folder, so --tab / --new-window can open it in Windows Terminal.
+OPEN_VERBS="init branch merge twig go up down open"
 
 cmd_help() {
   local v="${1:-}"
@@ -50,6 +53,21 @@ cmd_help() {
   for v in $VERBS; do "help_$v" | head -n 1 | sed 's/^/  /'; done
   echo
   echo "Global flags: -n/--dry-run  -v/--verbose  -q/--quiet  -y/--yes  -h/--help  --version"
+  echo "Open flags:   --tab  --new-window   (init, branch, branch merge, twig, go, up, down, open)"
+}
+
+# open_preflight <verb>: `open` means a new tab unless --new-window says otherwise.
+# With a mode set, refuse verbs that have no folder to open, then make sure Windows
+# Terminal is there before the verb changes anything: `ent branch x --tab` without WT
+# must fail before the branch exists, not after.
+open_preflight() {
+  if [[ "$1" == open && -z "$OPEN_MODE" ]]; then OPEN_MODE=tab; fi
+  [[ -n "$OPEN_MODE" ]] || return 0
+  case " $OPEN_VERBS " in
+    *" $1 "*) ;;
+    *) die "--tab and --new-window only apply to: $OPEN_VERBS" ;;
+  esac
+  wt_require
 }
 
 main() {
@@ -59,9 +77,10 @@ main() {
   if [[ "$verb" == branch && "$(arg 1)" == merge ]]; then verb=merge; fi
   if [[ -z "$verb" ]]; then cmd_help; exit 1; fi
   if (( HELP )); then cmd_help "$verb"; exit 0; fi
+  open_preflight "$verb"
   case "$verb" in
     help)    cmd_help "$(arg 1)" ;;
-    init|branch|merge|twig|track|list|status|log|go|up|down|path|sync|rm|destroy) "cmd_$verb" ;;
+    init|branch|merge|twig|track|list|status|log|go|up|down|open|path|sync|rm|destroy) "cmd_$verb" ;;
     __where) cmd_where ;;   # internal: used by the shell prompt helpers
     *)       die "unknown verb: $verb" ;;
   esac

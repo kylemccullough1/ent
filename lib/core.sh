@@ -46,8 +46,17 @@ worktree_bare_guard() {
   run git -C "$1" config --worktree core.bare false
 }
 
-# emit_path: print a path on stdout (for the `ent` wrapper to cd into) and a note on stderr.
-emit_path() { printf '%s\n' "$1"; if [[ -n "${2:-}" ]]; then note "$2"; fi; return 0; }
+# emit_path <path> [note] [title]: hand the verb's destination to the user. Normally
+# that means printing it on stdout for the `ent` wrapper to cd into. With --tab or
+# --new-window it opens the folder in Windows Terminal instead (lib/wt.sh) and prints
+# nothing, so the wrapper leaves your shell where it is. <title> names the new tab;
+# callers pass the branch, because the state snapshot predates any folder they just made.
+emit_path() {
+  if [[ -n "$OPEN_MODE" ]]; then wt_open "$1" "${3:-${1##*/}}"
+  else printf '%s\n' "$1"; fi
+  if [[ -n "${2:-}" ]]; then note "$2"; fi
+  return 0
+}
 
 # confirm: ask a yes/no question on the terminal. --yes answers yes to everything.
 confirm() {
@@ -77,6 +86,7 @@ choose() {
 # so for `ent branch merge -y`, ARGS=(branch merge).
 DRY_RUN=0 VERBOSE=0 QUIET=0 HELP=0 FORCE=0 RECURSIVE=0 YES=0 WIN=0 HERE=0
 MERGE_ABORT=0 MERGE_CONTINUE=0 FROM="" REMOTE="" WORKTREES=""
+OPEN_MODE=""     # tab or window: open the destination in Windows Terminal (--tab, --new-window)
 ARGS=()
 REST_ARGS=()     # whatever followed `--`, passed on to git (see cmd_log)
 ENT=""
@@ -92,6 +102,8 @@ parse_args() {
       --recursive|-r) RECURSIVE=1 ;;
       --yes|-y)       YES=1 ;;
       --win)          WIN=1 ;;
+      --tab)          [[ "$OPEN_MODE" != window ]] || die "--tab and --new-window can't be used together"; OPEN_MODE=tab ;;
+      --new-window)   [[ "$OPEN_MODE" != tab ]] || die "--tab and --new-window can't be used together"; OPEN_MODE=window ;;
       --here)         HERE=1 ;;
       --abort)        MERGE_ABORT=1 ;;
       --continue)     MERGE_CONTINUE=1 ;;
